@@ -1,8 +1,7 @@
 import Foundation
 @preconcurrency import Translation
 
-@MainActor
-final class AppleTranslationService {
+actor AppleTranslationService {
     private let availability = LanguageAvailability()
     private var sessionsByLanguagePair: [String: TranslationSession] = [:]
     private var availabilityByLanguagePair: [String: LanguageAvailability.Status] = [:]

@@ -5,8 +5,10 @@ extension String {
         let maxLines = max(1, maxLines)
         let trimmedText = trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return "" }
+        let maxCharacters = maxLines * 72
+        let scanText = String(trimmedText.boundedSuffix(maxCharacters: maxCharacters * 3))
 
-        let logicalLines = trimmedText
+        let logicalLines = scanText
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -15,13 +17,22 @@ extension String {
         if logicalLines.count > maxLines {
             tailText = logicalLines.suffix(maxLines).joined(separator: "\n")
         } else {
-            tailText = trimmedText
+            tailText = scanText
         }
 
-        let maxCharacters = maxLines * 72
         guard tailText.count > maxCharacters else { return tailText }
 
         return String(tailText.suffix(maxCharacters))
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func boundedSuffix(maxCharacters: Int) -> Substring {
+        guard maxCharacters > 0,
+              let start = index(endIndex, offsetBy: -maxCharacters, limitedBy: startIndex)
+        else {
+            return self[startIndex..<endIndex]
+        }
+
+        return self[start..<endIndex]
     }
 }

@@ -26,7 +26,7 @@ private struct TranslationRequest {
 @Observable
 @MainActor
 final class TranslationSessionStore {
-    private static let maxTranslationCacheEntries = 240
+    private static let maxTranslationCacheEntries = 2_000
     private static let maxArchivedTranscriptSessions = 12
 
     var isRunning = false

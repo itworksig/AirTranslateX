@@ -199,6 +199,7 @@ enum AppText {
         korean: "현재 기록은 화면에 남습니다. 새 캡처를 시작하면 이 세션은 이전 세션으로 접혀 보관됩니다."
     )
     static let copy = localized(english: "Copy", korean: "복사")
+    static let copied = localized(english: "Copied", korean: "복사됨")
     static func copyTranscriptPane(_ title: String) -> String {
         localized(english: "Copy \(title)", korean: "\(title) 복사")
     }

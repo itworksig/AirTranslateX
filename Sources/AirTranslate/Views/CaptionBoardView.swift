@@ -29,7 +29,7 @@ struct CaptionBoardView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         if !session.hasTranscriptSessionContent && !session.isRunning {
                             ContentUnavailableView(
                                 AppText.noCaptionsYet,
@@ -89,7 +89,7 @@ struct CaptionBoardView: View {
                     }
                     .padding(.vertical, 4)
                     .animation(.spring(response: 0.32, dampingFraction: 0.86), value: session.lines.count)
-                    .animation(.spring(response: 0.32, dampingFraction: 0.86), value: session.transcriptSessions)
+                    .animation(.spring(response: 0.32, dampingFraction: 0.86), value: session.transcriptSessions.count)
                 }
                 .onChange(of: session.lines.last?.id) { _, id in
                     if let id {
@@ -100,14 +100,14 @@ struct CaptionBoardView: View {
                 }
                 .onChange(of: session.lines.last?.revision) { _, _ in
                     if let id = session.lines.last?.id {
-                        withAnimation(.easeOut(duration: 0.22)) {
-                            proxy.scrollTo(id, anchor: .bottom)
-                        }
+                        proxy.scrollTo(id, anchor: .bottom)
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             syncFloatingCaptionVisibility()
         }
@@ -284,10 +284,12 @@ private struct TranscriptSessionSection: View {
                                 .strokeBorder(Color.primary.opacity(0.08))
                         }
                 } else {
-                    ForEach(lines) { line in
-                        CaptionLineView(line: line)
-                            .id(line.id)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(lines) { line in
+                            CaptionLineView(line: line)
+                                .id(line.id)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
                     }
                 }
             }
@@ -334,9 +336,13 @@ private struct TranscriptPane: View {
     let description: String
     let text: String
     let isPrimary: Bool
+    @State private var isTextOverflowing = false
+    @State private var isReadingBack = false
+    @State private var isCopyFeedbackVisible = false
+    @State private var copyFeedbackToken = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 8) {
                 Text(title)
                     .font(.caption.weight(.semibold))
@@ -345,15 +351,28 @@ private struct TranscriptPane: View {
                 Spacer(minLength: 8)
 
                 Button {
-                    copyText()
+                    if copyText() {
+                        showCopyFeedback()
+                    }
                 } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.caption)
+                    Image(systemName: isCopyFeedbackVisible ? "checkmark" : "doc.on.doc")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(isCopyFeedbackVisible ? Color.accentColor : Color.secondary)
+                        .frame(width: 26, height: 26)
+                        .background {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(isCopyFeedbackVisible ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.05))
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(isCopyFeedbackVisible ? Color.accentColor.opacity(0.28) : Color.primary.opacity(0.08))
+                        }
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(TranscriptPaneCopyButtonStyle())
                 .controlSize(.small)
-                .help(AppText.copyTranscriptPane(title))
+                .help(isCopyFeedbackVisible ? AppText.copied : AppText.copyTranscriptPane(title))
                 .accessibilityLabel(AppText.copyTranscriptPane(title))
+                .accessibilityValue(isCopyFeedbackVisible ? AppText.copied : AppText.copy)
                 .disabled(!canCopy)
             }
 
@@ -361,13 +380,24 @@ private struct TranscriptPane: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 
-            StreamingTranscriptText(
+            ScrollableTranscriptText(
                 text: text,
-                font: isPrimary ? .body : .body.weight(.medium)
+                weight: isPrimary ? .regular : .medium,
+                isOverflowing: $isTextOverflowing,
+                isReadingBack: $isReadingBack
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .mask {
+                if isTextOverflowing && isReadingBack {
+                    TranscriptScrollFadeMask()
+                } else {
+                    Rectangle()
+                }
+            }
         }
         .padding(18)
-        .frame(maxWidth: .infinity, minHeight: 360, alignment: .topLeading)
+        .frame(height: 360, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -376,16 +406,230 @@ private struct TranscriptPane: View {
     }
 
     private var canCopy: Bool {
-        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedText.isEmpty && trimmedText != AppText.translating
+        text.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil
+            && text != AppText.translating
     }
 
-    private func copyText() {
+    private func copyText() -> Bool {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty, trimmedText != AppText.translating else { return }
+        guard !trimmedText.isEmpty, trimmedText != AppText.translating else { return false }
 
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(trimmedText, forType: .string)
+        return true
+    }
+
+    private func showCopyFeedback() {
+        copyFeedbackToken += 1
+        let token = copyFeedbackToken
+
+        withAnimation(.snappy(duration: 0.16)) {
+            isCopyFeedbackVisible = true
+        }
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(900))
+            await MainActor.run {
+                guard token == copyFeedbackToken else { return }
+
+                withAnimation(.easeOut(duration: 0.18)) {
+                    isCopyFeedbackVisible = false
+                }
+            }
+        }
+    }
+}
+
+private struct TranscriptPaneCopyButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.88 : 1)
+            .opacity(configuration.isPressed ? 0.72 : 1)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
+private struct TranscriptScrollFadeMask: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 18)
+
+            Rectangle()
+                .fill(.black)
+
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 18)
+        }
+    }
+}
+
+private struct ScrollableTranscriptText: NSViewRepresentable {
+    let text: String
+    let weight: NSFont.Weight
+    @Binding var isOverflowing: Bool
+    @Binding var isReadingBack: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isOverflowing: $isOverflowing, isReadingBack: $isReadingBack)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = false
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.contentView.postsBoundsChangedNotifications = true
+
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.drawsBackground = false
+        textView.textColor = .labelColor
+        textView.font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: weight)
+        textView.textContainerInset = NSSize(width: 0, height: 0)
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
+        textView.autoresizingMask = [.width]
+
+        scrollView.documentView = textView
+        context.coordinator.attach(to: scrollView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+
+        let shouldStayPinnedToBottom = isPinnedToBottom(scrollView)
+        if textView.string != text {
+            textView.string = text
+        }
+
+        textView.font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: weight)
+        textView.textColor = .labelColor
+        textView.textContainer?.containerSize = NSSize(
+            width: scrollView.contentSize.width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        let documentHeight = updateDocumentSize(textView, in: scrollView)
+        let isOverflowing = documentHeight > scrollView.contentSize.height + 1
+        context.coordinator.updateState(
+            isOverflowing: isOverflowing,
+            isReadingBack: isOverflowing && !shouldStayPinnedToBottom
+        )
+
+        if shouldStayPinnedToBottom {
+            textView.scrollToEndOfDocument(nil)
+            context.coordinator.updateState(isOverflowing: isOverflowing, isReadingBack: false)
+        }
+    }
+
+    private func updateDocumentSize(_ textView: NSTextView, in scrollView: NSScrollView) -> CGFloat {
+        guard let textContainer = textView.textContainer,
+              let layoutManager = textView.layoutManager
+        else {
+            textView.frame.size = scrollView.contentSize
+            return scrollView.contentSize.height
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let usedHeight = layoutManager.usedRect(for: textContainer).height + textView.textContainerInset.height * 2
+        textView.frame.size = NSSize(
+            width: scrollView.contentSize.width,
+            height: max(scrollView.contentSize.height, usedHeight)
+        )
+        return usedHeight
+    }
+
+    private func isPinnedToBottom(_ scrollView: NSScrollView) -> Bool {
+        guard let documentView = scrollView.documentView else { return true }
+
+        let visibleMaxY = scrollView.contentView.bounds.maxY
+        let documentHeight = documentView.bounds.height
+        return documentHeight <= scrollView.contentSize.height || documentHeight - visibleMaxY < 24
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private var isOverflowing: Binding<Bool>
+        private var isReadingBack: Binding<Bool>
+        private weak var scrollView: NSScrollView?
+
+        init(isOverflowing: Binding<Bool>, isReadingBack: Binding<Bool>) {
+            self.isOverflowing = isOverflowing
+            self.isReadingBack = isReadingBack
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        func attach(to scrollView: NSScrollView) {
+            self.scrollView = scrollView
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(contentBoundsDidChange),
+                name: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView
+            )
+        }
+
+        func updateState(isOverflowing: Bool, isReadingBack: Bool) {
+            guard self.isOverflowing.wrappedValue != isOverflowing
+                || self.isReadingBack.wrappedValue != isReadingBack
+            else {
+                return
+            }
+
+            self.isOverflowing.wrappedValue = isOverflowing
+            self.isReadingBack.wrappedValue = isReadingBack
+        }
+
+        @objc private func contentBoundsDidChange() {
+            guard let scrollView else { return }
+            let isOverflowing = hasOverflow(scrollView)
+            updateState(
+                isOverflowing: isOverflowing,
+                isReadingBack: isOverflowing && !isPinnedToBottom(scrollView)
+            )
+        }
+
+        private func hasOverflow(_ scrollView: NSScrollView) -> Bool {
+            guard let documentView = scrollView.documentView else { return false }
+            return documentView.bounds.height > scrollView.contentSize.height + 1
+        }
+
+        private func isPinnedToBottom(_ scrollView: NSScrollView) -> Bool {
+            guard let documentView = scrollView.documentView else { return true }
+
+            let visibleMaxY = scrollView.contentView.bounds.maxY
+            let documentHeight = documentView.bounds.height
+            return documentHeight <= scrollView.contentSize.height || documentHeight - visibleMaxY < 24
+        }
     }
 }
 
@@ -400,28 +644,19 @@ private struct SessionOverviewCard: View {
     let showFloatingCaptions: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: "captions.bubble.fill")
-                .font(.title2)
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 34, height: 34)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.title2.weight(.semibold))
-                    .lineLimit(1)
-
-                Text(subtitle)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .layoutPriority(1)
+                .frame(width: 32, height: 32)
+                .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .help("\(title) · \(subtitle)")
+                .accessibilityLabel(title)
+                .accessibilityValue(subtitle)
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 SessionStatusBadge(isRunning: isRunning, isPaused: isPaused)
 
                 Button(action: toggleCapture) {
@@ -448,7 +683,7 @@ private struct SessionOverviewCard: View {
                 .accessibilityLabel(AppText.showFloatingCaptions)
                 .accessibilityValue(isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff)
             }
-            .padding(6)
+            .padding(4)
             .background(.ultraThinMaterial, in: Capsule())
             .overlay {
                 Capsule()
@@ -456,10 +691,12 @@ private struct SessionOverviewCard: View {
             }
             .layoutPriority(2)
         }
-        .padding(16)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(minHeight: 56)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.06))
         }
     }
@@ -485,28 +722,28 @@ private struct HeaderCaptureTransportButton: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(accentColor.opacity(isRunning ? 0.18 : 0.14))
 
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(accentColor.opacity(isRunning ? 0.5 : 0.32), lineWidth: 1)
 
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .black))
+                .font(.system(size: 14, weight: .black))
                 .foregroundStyle(accentColor)
-                .offset(x: isRunning ? 0 : 1.4)
+                .offset(x: isRunning ? 0 : 1)
 
             if isRunning {
                 Circle()
                     .fill(isPaused ? Color.orange : Color.green)
-                    .frame(width: 7, height: 7)
+                    .frame(width: 6, height: 6)
                     .shadow(color: (isPaused ? Color.orange : Color.green).opacity(0.6), radius: 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(7)
+                    .padding(6)
             }
         }
-        .frame(width: 42, height: 42)
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(width: 34, height: 34)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -519,19 +756,19 @@ private struct HeaderPauseTransportButton: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(accentColor.opacity(isPaused ? 0.14 : 0.1))
 
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(accentColor.opacity(isPaused ? 0.34 : 0.18), lineWidth: 1)
 
             Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(accentColor)
-                .offset(x: isPaused ? 1.1 : 0)
+                .offset(x: isPaused ? 0.9 : 0)
         }
-        .frame(width: 42, height: 42)
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(width: 34, height: 34)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -544,25 +781,25 @@ private struct HeaderFloatingCaptionToggleButton: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(accentColor.opacity(isOn ? 0.16 : 0.1))
 
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(accentColor.opacity(isOn ? 0.42 : 0.18), lineWidth: 1)
 
             Image(systemName: isOn ? "captions.bubble.fill" : "captions.bubble")
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(accentColor)
 
             Circle()
                 .fill(isOn ? Color.green : Color.secondary.opacity(0.55))
-                .frame(width: 7, height: 7)
+                .frame(width: 6, height: 6)
                 .shadow(color: (isOn ? Color.green : Color.clear).opacity(0.6), radius: 4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(7)
+                .padding(6)
         }
-        .frame(width: 42, height: 42)
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(width: 34, height: 34)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -584,12 +821,12 @@ private struct SessionStatusBadge: View {
 
     var body: some View {
         Image(systemName: systemImage)
-            .font(.system(size: 16, weight: .semibold))
+            .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(foregroundStyle)
-            .frame(width: 42, height: 42)
-            .background(foregroundStyle.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .frame(width: 34, height: 34)
+            .background(foregroundStyle.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(foregroundStyle.opacity(0.18), lineWidth: 1)
             }
             .help(title)

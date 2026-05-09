@@ -67,6 +67,7 @@ struct StreamingTranscriptText: View {
 
     private func stream(to newText: String) {
         streamTask?.cancel()
+        let newTextLength = newText.utf16.count
 
         if !appearingText.isEmpty {
             settledText += appearingText
@@ -85,12 +86,13 @@ struct StreamingTranscriptText: View {
             return
         }
 
-        guard newText.count <= Self.maxAnimatedTextLength else {
+        guard newTextLength <= Self.maxAnimatedTextLength else {
             settledText = newText
             return
         }
 
-        guard newText.hasPrefix(visibleText), newText.count > visibleText.count else {
+        let visibleText = visibleText
+        guard newText.hasPrefix(visibleText), newTextLength > visibleText.utf16.count else {
             settledText = newText
             appearingText = ""
             appearingOpacity = 1
@@ -98,14 +100,15 @@ struct StreamingTranscriptText: View {
         }
 
         let remainingText = String(newText.dropFirst(visibleText.count))
-        guard remainingText.count <= Self.maxAnimatedDeltaLength else {
+        let remainingTextLength = remainingText.utf16.count
+        guard remainingTextLength <= Self.maxAnimatedDeltaLength else {
             settledText = newText
             return
         }
 
-        let chunkSize = remainingText.count > 72 ? 8 : (remainingText.count > 28 ? 6 : 4)
-        let delay = remainingText.count > 72 ? 10_000_000 : (remainingText.count > 28 ? 14_000_000 : 18_000_000)
-        let fadeDuration = remainingText.count > 72 ? 0.08 : 0.12
+        let chunkSize = remainingTextLength > 72 ? 8 : (remainingTextLength > 28 ? 6 : 4)
+        let delay = remainingTextLength > 72 ? 10_000_000 : (remainingTextLength > 28 ? 14_000_000 : 18_000_000)
+        let fadeDuration = remainingTextLength > 72 ? 0.08 : 0.12
         let chunks = remainingText.chunkedForTranscriptStreaming(maxCharacters: chunkSize)
 
         streamTask = Task { @MainActor in
