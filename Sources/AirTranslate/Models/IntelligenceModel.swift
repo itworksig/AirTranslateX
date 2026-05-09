@@ -5,16 +5,29 @@ enum IntelligenceModel: String, CaseIterable, Identifiable {
     case appleOnDevice = "apple-on-device"
     case appleSpeechOnly = "apple-speech-only"
 
+    static var allCases: [IntelligenceModel] {
+        [.appleSystem, .appleSpeechOnly]
+    }
+
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .appleSystem:
-            AppText.localized(english: "Apple System", korean: "Apple 시스템")
+            AppText.localized(
+                english: "Live Transcription + Translation",
+                korean: "실시간 전사 + 번역"
+            )
         case .appleOnDevice:
-            AppText.localized(english: "Apple On-Device", korean: "Apple 온디바이스")
+            AppText.localized(
+                english: "Translation Language Pack",
+                korean: "번역 언어팩"
+            )
         case .appleSpeechOnly:
-            AppText.localized(english: "Speech Captions", korean: "음성 기록")
+            AppText.localized(
+                english: "Transcribe Only",
+                korean: "전사만"
+            )
         }
     }
 
@@ -22,19 +35,26 @@ enum IntelligenceModel: String, CaseIterable, Identifiable {
         switch self {
         case .appleSystem:
             AppText.localized(
-                english: "Speech plus Translation frameworks.",
-                korean: "Speech와 Translation 프레임워크를 사용합니다."
+                english: "Live transcription with SpeechTranscriber, then TranslationSession for the selected language pair.",
+                korean: "SpeechTranscriber로 실시간 전사한 뒤 선택한 언어쌍을 TranslationSession으로 번역합니다."
             )
         case .appleOnDevice:
             AppText.localized(
-                english: "Uses downloaded language assets when ready.",
-                korean: "준비된 다운로드 언어 자산을 사용합니다."
+                english: "Checks the installed Apple Translation language assets for the selected source and target languages.",
+                korean: "선택한 원문/번역 언어쌍의 Apple 번역 언어 자산 설치 상태를 확인합니다."
             )
         case .appleSpeechOnly:
             AppText.localized(
-                english: "Transcribes without translating.",
-                korean: "번역 없이 기록만 수행합니다."
+                english: "Uses SpeechTranscriber for source-language captions only, without TranslationSession.",
+                korean: "TranslationSession 없이 SpeechTranscriber만 사용해 원문 자막을 기록합니다."
             )
         }
+    }
+
+    var checkingDetail: String {
+        AppText.localized(
+            english: "Checking local assets for \(title)...",
+            korean: "\(title) 로컬 자산을 확인하는 중입니다..."
+        )
     }
 }

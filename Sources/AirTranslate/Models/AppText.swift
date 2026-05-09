@@ -9,6 +9,11 @@ enum AppText {
         usesKorean ? korean : english
     }
 
+    static let appName = "AirTranslate"
+    static let appTagline = localized(
+        english: "Live transcript translator",
+        korean: "실시간 기록 번역"
+    )
     static let ready = localized(english: "Ready", korean: "준비됨")
     static let stopped = localized(english: "Stopped", korean: "중지됨")
     static let paused = localized(english: "Paused", korean: "일시정지됨")
@@ -16,12 +21,34 @@ enum AppText {
     static let start = localized(english: "Start", korean: "시작")
     static let stop = localized(english: "Stop", korean: "중지")
     static let close = localized(english: "Close", korean: "닫기")
+    static let cancel = localized(english: "Cancel", korean: "취소")
     static let pause = localized(english: "Pause", korean: "일시정지")
     static let resume = localized(english: "Resume", korean: "재개")
     static let languages = localized(english: "Languages", korean: "언어")
     static let from = localized(english: "From", korean: "원문")
     static let to = localized(english: "To", korean: "번역")
-    static let model = localized(english: "Model", korean: "모델")
+    static let model = localized(english: "Mode", korean: "처리 방식")
+    static let modelStatusChecking = localized(english: "Checking", korean: "확인 중")
+    static let modelStatusInstalled = localized(english: "Installed", korean: "설치됨")
+    static let modelStatusDownloadRequired = localized(english: "Download Needed", korean: "다운로드 필요")
+    static let modelStatusDownloading = localized(english: "Downloading", korean: "다운로드 중")
+    static let modelStatusUnsupported = localized(english: "Unsupported", korean: "미지원")
+    static let modelStatusUnavailable = localized(english: "Unavailable", korean: "사용 불가")
+    static let modelStatusFailed = localized(english: "Check Failed", korean: "확인 실패")
+    static let download = localized(english: "Download", korean: "다운로드")
+    static let downloadModelAssets = localized(
+        english: "Download model assets",
+        korean: "모델 자산 다운로드"
+    )
+    static let requiredAssets = localized(english: "Required Assets", korean: "필요 자산")
+    static let speechLanguagePack = localized(
+        english: "Speech Recognition Pack",
+        korean: "음성 인식 언어팩"
+    )
+    static let translationLanguagePack = localized(
+        english: "Translation Language Pack",
+        korean: "번역 언어팩"
+    )
     static let output = localized(english: "Output", korean: "출력")
     static let session = localized(english: "Session", korean: "세션")
     static let transcript = localized(english: "Transcript", korean: "기록")
@@ -72,6 +99,10 @@ enum AppText {
         korean: "이 시간만큼 말이 멈춘 뒤 다시 시작되면 기록을 새 문단으로 나눕니다."
     )
     static let savedTranscripts = localized(english: "Saved Transcripts", korean: "저장된 기록")
+    static let savedTranscriptContent = localized(
+        english: "Saved Content",
+        korean: "저장 내용"
+    )
     static let autoSave = localized(english: "Auto-save", korean: "자동 저장")
     static let autoSaveDescription = localized(
         english: "Transcript text is kept in memory while listening, then saved as a dated plain .txt file with a short content title when capture stops or the app quits.",
@@ -85,9 +116,33 @@ enum AppText {
         english: "Open Library",
         korean: "저장소 열기"
     )
+    static let manageSavedTranscripts = localized(
+        english: "Manage Saved Transcripts",
+        korean: "저장된 기록 관리"
+    )
+    static let librarySummary = localized(
+        english: "Review, edit, delete, or open saved transcript files in a focused library window.",
+        korean: "저장된 기록 확인, 수정, 삭제, 폴더 열기는 별도 관리 창에서 처리합니다."
+    )
     static let savedEmpty = localized(
         english: "Auto-saved transcripts will appear here.",
         korean: "자동 저장된 기록이 여기에 표시됩니다."
+    )
+    static let noSavedTranscriptSelected = localized(
+        english: "Select a saved transcript.",
+        korean: "저장된 기록을 선택하세요."
+    )
+    static let deleteAllSavedTranscripts = localized(
+        english: "Delete All",
+        korean: "모두 지우기"
+    )
+    static let deleteAllSavedTranscriptsConfirmation = localized(
+        english: "Delete all saved transcript files? This cannot be undone.",
+        korean: "저장된 기록 파일을 모두 지울까요? 이 작업은 되돌릴 수 없습니다."
+    )
+    static let deleteAllSavedTranscriptsHelp = localized(
+        english: "Delete every saved transcript file.",
+        korean: "저장된 모든 기록 파일을 삭제합니다."
     )
     static let editSaved = localized(english: "Edit Saved", korean: "저장본 편집")
     static let title = localized(english: "Title", korean: "제목")
@@ -106,6 +161,47 @@ enum AppText {
     static let saveEdits = localized(english: "Save Edits", korean: "수정 저장")
     static let liveCaptions = localized(english: "Live Captions", korean: "실시간 기록")
     static let transcriptWorkspace = localized(english: "Transcript Workspace", korean: "실시간 기록")
+    static let currentSession = localized(english: "Current Session", korean: "현재 세션")
+    static let previousSession = localized(english: "Previous Session", korean: "이전 세션")
+    static let previousSessions = localized(english: "Previous Sessions", korean: "이전 세션")
+    static let delete = localized(english: "Delete", korean: "삭제")
+    static let deleteTranscriptSession = localized(english: "Delete Session", korean: "세션 삭제")
+    static let deleteAllTranscriptSessions = localized(
+        english: "Delete All",
+        korean: "모두 지우기"
+    )
+    static let deleteTranscriptSessionConfirmationTitle = localized(
+        english: "Delete this session?",
+        korean: "이 세션을 삭제할까요?"
+    )
+    static let deleteTranscriptSessionConfirmationMessage = localized(
+        english: "This previous session will be removed from the transcript workspace. This cannot be undone.",
+        korean: "이전 세션 기록이 실시간 기록 화면에서 삭제됩니다. 이 작업은 되돌릴 수 없습니다."
+    )
+    static let deleteAllTranscriptSessionsConfirmationTitle = localized(
+        english: "Delete all previous sessions?",
+        korean: "이전 세션을 모두 지울까요?"
+    )
+    static let deleteAllTranscriptSessionsConfirmationMessage = localized(
+        english: "All folded previous sessions will be removed from the transcript workspace. This cannot be undone.",
+        korean: "접혀 보관된 이전 세션이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다."
+    )
+    static let waitingForSessionTranscript = localized(
+        english: "This session is open. Captions will appear here.",
+        korean: "이 세션이 펼쳐져 있습니다. 기록이 시작되면 여기에 표시됩니다."
+    )
+    static let stopCaptureConfirmationTitle = localized(
+        english: "Stop capture?",
+        korean: "캡처를 중지할까요?"
+    )
+    static let stopCaptureConfirmationMessage = localized(
+        english: "The current transcript stays visible. When you start a new capture, this session will fold into Previous Session.",
+        korean: "현재 기록은 화면에 남습니다. 새 캡처를 시작하면 이 세션은 이전 세션으로 접혀 보관됩니다."
+    )
+    static let copy = localized(english: "Copy", korean: "복사")
+    static func copyTranscriptPane(_ title: String) -> String {
+        localized(english: "Copy \(title)", korean: "\(title) 복사")
+    }
     static let listening = localized(english: "Listening", korean: "듣는 중")
     static let idle = localized(english: "Idle", korean: "대기")
     static let noCaptionsYet = localized(english: "No captions yet", korean: "아직 기록 없음")
@@ -149,11 +245,40 @@ enum AppText {
         localized(english: "\(count) lines", korean: "\(count)줄")
     }
 
+    static func previousSessionCount(_ count: Int) -> String {
+        localized(english: "\(count) saved", korean: "\(count)개 보관됨")
+    }
+
     static func seconds(_ seconds: Double) -> String {
         let value = seconds.rounded(.toNearestOrAwayFromZero) == seconds
             ? String(Int(seconds))
             : String(format: "%.1f", seconds)
         return localized(english: "\(value) sec", korean: "\(value)초")
+    }
+
+    static func speechModelAvailabilityDetail(source: String, status: String) -> String {
+        localized(
+            english: "Source: \(source). Local asset: \(status).",
+            korean: "원문: \(source). 로컬 자산: \(status)."
+        )
+    }
+
+    static func translationModelAvailabilityDetail(source: String, target: String, status: String) -> String {
+        localized(
+            english: "\(source) to \(target). Local asset: \(status).",
+            korean: "\(source) → \(target). 로컬 자산: \(status)."
+        )
+    }
+
+    static func combinedModelAvailabilityDetail(
+        model: String,
+        speechStatus: String,
+        translationStatus: String
+    ) -> String {
+        localized(
+            english: "Speech: \(speechStatus). Translation: \(translationStatus).",
+            korean: "음성 인식: \(speechStatus). 번역: \(translationStatus)."
+        )
     }
 
     static func startFailed(_ message: String) -> String {

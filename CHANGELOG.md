@@ -2,12 +2,22 @@
 
 All notable changes to AirTranslate are documented in this file.
 
+## 2026-05-09 - Library Modal UI
+
+### Changed
+
+- Moved saved transcript management out of the sidebar into a focused modal library view.
+- Kept the sidebar storage area as a compact entry point for opening saved transcript management.
+- Added a saved transcript content selector for original, original plus translation, or translation-only output.
+- Added a confirmation-protected delete-all action for saved transcript files.
+
 ## 2026-05-09 - MIT Open Source License
 
 ### Added
 
 - Added the MIT License as the project license.
 - Documented that source code, documentation, scripts, and bundled project assets are covered by the MIT License unless otherwise noted.
+- Added README privacy notes describing local-first processing, required permissions, and the absence of app-owned servers, analytics SDKs, or telemetry.
 
 ## 2026-05-09 - Transcript Control and Stability
 

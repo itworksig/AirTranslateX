@@ -4,6 +4,7 @@ struct MenuBarStatusView: View {
     @Bindable var session: TranslationSessionStore
     @Environment(\.openWindow) private var openWindow
     @State private var isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
+    @State private var isStopConfirmationPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -27,6 +28,14 @@ struct MenuBarStatusView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: FloatingCaptionWindowController.visibilityDidChangeNotification)) { _ in
             syncFloatingCaptionVisibility()
+        }
+        .alert(AppText.stopCaptureConfirmationTitle, isPresented: $isStopConfirmationPresented) {
+            Button(AppText.cancel, role: .cancel) {}
+            Button(AppText.stop, role: .destructive) {
+                session.stop()
+            }
+        } message: {
+            Text(AppText.stopCaptureConfirmationMessage)
         }
     }
 
@@ -99,7 +108,7 @@ struct MenuBarStatusView: View {
             .help(AppText.openMainWindow)
 
             Button {
-                session.isRunning ? session.stop() : session.start()
+                toggleCapture()
             } label: {
                 IconPanelButtonLabel(
                     systemImage: session.isRunning ? "stop.fill" : "play.fill",
@@ -223,6 +232,14 @@ struct MenuBarStatusView: View {
     private func toggleFloatingCaptions() {
         FloatingCaptionWindowController.toggle(session: session)
         syncFloatingCaptionVisibility()
+    }
+
+    private func toggleCapture() {
+        if session.isRunning {
+            isStopConfirmationPresented = true
+        } else {
+            session.start()
+        }
     }
 
     private func syncFloatingCaptionVisibility() {

@@ -13,6 +13,7 @@ private enum SettingsKey {
     static let floatingCaptionTextSize = "floatingCaptionTextSize"
     static let floatingCaptionLineCount = "floatingCaptionLineCount"
     static let paragraphBreakSilenceInterval = "paragraphBreakSilenceInterval"
+    static let savedTranscriptContentMode = "savedTranscriptContentMode"
 }
 
 private struct TranslationRequest {
@@ -26,6 +27,7 @@ private struct TranslationRequest {
 @MainActor
 final class TranslationSessionStore {
     private static let maxTranslationCacheEntries = 240
+    private static let maxArchivedTranscriptSessions = 12
 
     var isRunning = false
     var isPaused = false
@@ -46,6 +48,7 @@ final class TranslationSessionStore {
             persistSelectedSettings()
             resetTranslationCache()
             resetDubbingProgress()
+            refreshModelAvailability()
         }
     }
     var targetLanguage = LanguageOption.supported[1] {
@@ -53,6 +56,7 @@ final class TranslationSessionStore {
             persistSelectedSettings()
             resetTranslationCache()
             resetDubbingProgress()
+            refreshModelAvailability()
         }
     }
     var selectedModel = IntelligenceModel.appleSystem {
@@ -77,11 +81,20 @@ final class TranslationSessionStore {
     var paragraphBreakSilenceInterval = 5.0 {
         didSet { persistSelectedSettings() }
     }
+    var savedTranscriptContentMode = SavedTranscriptContentMode.original {
+        didSet { persistSelectedSettings() }
+    }
     var statusMessage = AppText.ready
     var lines: [CaptionLine] = []
+    var transcriptSessions: [TranscriptSessionGroup] = []
     var savedTranscripts: [SavedTranscript] = []
     var selectedSavedTranscriptID: String?
     var savedDraftSourceText = ""
+    var modelAvailabilityByModelID = Dictionary(
+        uniqueKeysWithValues: IntelligenceModel.allCases.map {
+            ($0.id, ModelAvailability.checking(for: $0))
+        }
+    )
 
     private let capture = SystemAudioCapture()
     private let transcriber = LiveSpeechTranscriber()
@@ -94,6 +107,7 @@ final class TranslationSessionStore {
     private var lastRecognizedText = ""
     private var lastRecognizedWasFinal = false
     private var lastRecognitionAt = Date.distantPast
+    private var currentTranscriptSessionStartedAt = Date()
     private var currentLineID: UUID?
     private var transcriptCleanupTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
@@ -107,7 +121,9 @@ final class TranslationSessionStore {
     private var translationCacheKeyOrder: [String] = []
     private var activeAutosaveTranscriptID: String?
     private var activeAutosaveSourceText = ""
+    private var activeAutosaveTranslatedText = ""
     private var isRestoringSelectedSettings = false
+    private var modelAvailabilityTask: Task<Void, Never>?
     private var lastSpokenTranslatedText = ""
     private var spokenTranslationUnitKeys: Set<String> = []
     private var spokenTranslationUnitKeyOrder: [String] = []
@@ -117,12 +133,15 @@ final class TranslationSessionStore {
         capture.delegate = self
         transcriber.delegate = self
         loadSavedTranscripts()
+        refreshModelAvailability()
     }
 
     func start() {
         guard !isRunning else { return }
 
+        archiveCurrentTranscriptSessionIfNeeded()
         resetLiveSessionState(clearsVisibleLines: true)
+        currentTranscriptSessionStartedAt = Date()
         isPaused = false
         transcriber.setPaused(false)
         isRunning = true
@@ -150,7 +169,7 @@ final class TranslationSessionStore {
         guard isRunning else { return }
 
         flushPendingTranscriptSave()
-        resetLiveSessionState(clearsVisibleLines: true)
+        resetLiveSessionState(clearsVisibleLines: false)
         isPaused = false
         transcriber.setPaused(false)
         isRunning = false
@@ -211,6 +230,37 @@ final class TranslationSessionStore {
         AppText.languageSummary(source: sourceLanguage.localizedTitle, target: targetLanguage.localizedTitle)
     }
 
+    func modelAvailability(for model: IntelligenceModel) -> ModelAvailability {
+        modelAvailabilityByModelID[model.id] ?? ModelAvailability.checking(for: model)
+    }
+
+    func downloadModelAssets(for model: IntelligenceModel) {
+        guard modelAvailability(for: model).state.canDownload else { return }
+
+        let sourceLanguage = sourceLanguage
+        let targetLanguage = targetLanguage
+        modelAvailabilityByModelID[model.id] = ModelAvailability(
+            state: .downloading,
+            detail: model.detail
+        )
+
+        Task { @MainActor in
+            do {
+                try await ModelAvailabilityChecker.downloadAssets(
+                    for: model,
+                    source: sourceLanguage,
+                    target: targetLanguage
+                )
+                refreshModelAvailability()
+            } catch {
+                modelAvailabilityByModelID[model.id] = ModelAvailability(
+                    state: .failed,
+                    detail: error.localizedDescription
+                )
+            }
+        }
+    }
+
     var floatingSourceText: String {
         floatingCaptionText(from: lines.last?.sourceText)
     }
@@ -227,6 +277,31 @@ final class TranslationSessionStore {
 
     var hasFloatingCaptionContent: Bool {
         !floatingSourceText.isEmpty || !floatingTranslationText.isEmpty
+    }
+
+    var hasTranscriptSessionContent: Bool {
+        !transcriptSessions.isEmpty || !lines.isEmpty
+    }
+
+    var shouldShowCurrentTranscriptSession: Bool {
+        isRunning || !lines.isEmpty || !transcriptSessions.isEmpty
+    }
+
+    var currentTranscriptSessionDate: Date {
+        currentTranscriptSessionStartedAt
+    }
+
+    func toggleTranscriptSession(_ id: UUID) {
+        guard let index = transcriptSessions.firstIndex(where: { $0.id == id }) else { return }
+        transcriptSessions[index].isExpanded.toggle()
+    }
+
+    func deleteTranscriptSession(_ id: UUID) {
+        transcriptSessions.removeAll { $0.id == id }
+    }
+
+    func deleteAllTranscriptSessions() {
+        transcriptSessions.removeAll()
     }
 
     func selectSavedTranscript(_ id: String) {
@@ -264,9 +339,35 @@ final class TranslationSessionStore {
         if activeAutosaveTranscriptID == selectedSavedTranscriptID {
             activeAutosaveTranscriptID = nil
             activeAutosaveSourceText = ""
+            activeAutosaveTranslatedText = ""
         }
         self.selectedSavedTranscriptID = nil
         savedDraftSourceText = ""
+    }
+
+    func deleteAllSavedTranscripts() {
+        do {
+            try FileManager.default.createDirectory(
+                at: transcriptsDirectoryURL,
+                withIntermediateDirectories: true
+            )
+            let fileURLs = try FileManager.default.contentsOfDirectory(
+                at: transcriptsDirectoryURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            for fileURL in fileURLs where fileURL.pathExtension == "txt" {
+                try FileManager.default.removeItem(at: fileURL)
+            }
+            savedTranscripts.removeAll()
+            selectedSavedTranscriptID = nil
+            savedDraftSourceText = ""
+            activeAutosaveTranscriptID = nil
+            activeAutosaveSourceText = ""
+            activeAutosaveTranslatedText = ""
+        } catch {
+            statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
+        }
     }
 
     private func startCaptioners() async throws {
@@ -292,6 +393,7 @@ final class TranslationSessionStore {
         resetTranslationCache()
         activeAutosaveTranscriptID = nil
         activeAutosaveSourceText = ""
+        activeAutosaveTranslatedText = ""
         stopSpeaking()
         lastSpokenTranslatedText = ""
         clearSpokenTranslationUnits()
@@ -302,6 +404,22 @@ final class TranslationSessionStore {
 
         if clearsVisibleLines {
             lines.removeAll()
+        }
+    }
+
+    private func archiveCurrentTranscriptSessionIfNeeded() {
+        guard !lines.isEmpty else { return }
+
+        transcriptSessions.append(
+            TranscriptSessionGroup(
+                startedAt: currentTranscriptSessionStartedAt,
+                languageSummary: languageSummary,
+                lines: lines,
+                isExpanded: false
+            )
+        )
+        while transcriptSessions.count > Self.maxArchivedTranscriptSessions {
+            transcriptSessions.removeFirst()
         }
     }
 
@@ -316,6 +434,30 @@ final class TranslationSessionStore {
                 target: warmTargetLanguage,
                 model: warmSelectedModel
             )
+        }
+    }
+
+    func refreshModelAvailability() {
+        let sourceLanguage = sourceLanguage
+        let targetLanguage = targetLanguage
+
+        modelAvailabilityTask?.cancel()
+        modelAvailabilityByModelID = Dictionary(
+            uniqueKeysWithValues: IntelligenceModel.allCases.map {
+                ($0.id, ModelAvailability.checking(for: $0))
+            }
+        )
+
+        modelAvailabilityTask = Task { [weak self, sourceLanguage, targetLanguage] in
+            let availabilityByModelID = await ModelAvailabilityChecker.availability(
+                source: sourceLanguage,
+                target: targetLanguage
+            )
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                self?.modelAvailabilityByModelID = availabilityByModelID
+            }
         }
     }
 
@@ -334,7 +476,7 @@ final class TranslationSessionStore {
         }
         if let modelID = defaults.string(forKey: SettingsKey.selectedModelID),
            let model = IntelligenceModel(rawValue: modelID) {
-            selectedModel = model
+            selectedModel = model == .appleOnDevice ? .appleSystem : model
         }
         if defaults.object(forKey: SettingsKey.isDubbingEnabled) != nil {
             isDubbingEnabled = defaults.bool(forKey: SettingsKey.isDubbingEnabled)
@@ -361,6 +503,10 @@ final class TranslationSessionStore {
                 15
             )
         }
+        if let contentModeID = defaults.string(forKey: SettingsKey.savedTranscriptContentMode),
+           let contentMode = SavedTranscriptContentMode(rawValue: contentModeID) {
+            savedTranscriptContentMode = contentMode
+        }
     }
 
     private func persistSelectedSettings() {
@@ -376,6 +522,7 @@ final class TranslationSessionStore {
         defaults.set(floatingCaptionTextSize.id, forKey: SettingsKey.floatingCaptionTextSize)
         defaults.set(floatingCaptionLineCount.id, forKey: SettingsKey.floatingCaptionLineCount)
         defaults.set(paragraphBreakSilenceInterval, forKey: SettingsKey.paragraphBreakSilenceInterval)
+        defaults.set(savedTranscriptContentMode.id, forKey: SettingsKey.savedTranscriptContentMode)
     }
 
     private func floatingCaptionText(from text: String?) -> String {
@@ -414,23 +561,49 @@ final class TranslationSessionStore {
         }
     }
 
-    private func stageTranscriptForSave(_ sourceText: String) {
+    private func stageTranscriptForSave(_ sourceText: String, translatedText: String? = nil) {
         let sourceText = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sourceText.isEmpty else { return }
 
         activeAutosaveSourceText = sourceText
+        if let translatedText {
+            let translatedText = translatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !translatedText.isEmpty, translatedText != AppText.translating {
+                activeAutosaveTranslatedText = translatedText
+            }
+        }
     }
 
     private func flushPendingTranscriptSave() {
         let sourceText = activeAutosaveSourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sourceText.isEmpty else { return }
 
+        let savedText = savedTranscriptText(
+            sourceText: sourceText,
+            translatedText: activeAutosaveTranslatedText
+        )
         let updatedAt = Date()
         let fileName = activeAutosaveTranscriptID ?? makeTranscriptFileName(for: sourceText, date: updatedAt)
-        guard writeTranscriptText(sourceText, fileName: fileName) else { return }
+        guard writeTranscriptText(savedText, fileName: fileName) else { return }
         activeAutosaveTranscriptID = nil
         activeAutosaveSourceText = ""
-        upsertSavedTranscript(fileName: fileName, sourceText: sourceText, updatedAt: updatedAt)
+        activeAutosaveTranslatedText = ""
+        upsertSavedTranscript(fileName: fileName, sourceText: savedText, updatedAt: updatedAt)
+    }
+
+    private func savedTranscriptText(sourceText: String, translatedText: String) -> String {
+        let sourceText = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let translatedText = translatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch savedTranscriptContentMode {
+        case .original:
+            return sourceText
+        case .translation:
+            return translatedText.isEmpty ? sourceText : translatedText
+        case .originalAndTranslation:
+            guard !translatedText.isEmpty else { return sourceText }
+            return "\(AppText.original)\n\(sourceText)\n\n\(AppText.translation)\n\(translatedText)"
+        }
     }
 
     @discardableResult
@@ -1087,6 +1260,7 @@ final class TranslationSessionStore {
         if pendingTranslationSourceText == sourceText {
             pendingTranslationSourceText = ""
         }
+        stageTranscriptForSave(sourceText, translatedText: organizedTranslatedText)
 
         lines[index] = CaptionLine(
             id: line.id,

@@ -1,6 +1,6 @@
 import Foundation
 
-struct LanguageOption: Identifiable, Hashable {
+struct LanguageOption: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
     let locale: Locale

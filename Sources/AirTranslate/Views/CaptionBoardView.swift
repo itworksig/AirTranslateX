@@ -1,8 +1,12 @@
+import AppKit
 import SwiftUI
 
 struct CaptionBoardView: View {
     @Bindable var session: TranslationSessionStore
     @State private var isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
+    @State private var isStopConfirmationPresented = false
+    @State private var transcriptSessionIDPendingDeletion: UUID?
+    @State private var isClearTranscriptSessionsConfirmationPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -13,7 +17,7 @@ struct CaptionBoardView: View {
                 isPaused: session.isPaused,
                 isFloatingCaptionVisible: isFloatingCaptionVisible,
                 toggleCapture: {
-                    toggleCapture()
+                    requestCaptureToggle()
                 },
                 togglePause: {
                     togglePause()
@@ -26,7 +30,7 @@ struct CaptionBoardView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        if session.lines.isEmpty {
+                        if !session.hasTranscriptSessionContent && !session.isRunning {
                             ContentUnavailableView(
                                 AppText.noCaptionsYet,
                                 systemImage: "captions.bubble",
@@ -41,14 +45,51 @@ struct CaptionBoardView: View {
                             }
                         }
 
-                        ForEach(session.lines) { line in
-                            CaptionLineView(line: line)
-                                .id(line.id)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        if !session.transcriptSessions.isEmpty {
+                            PreviousSessionsHeader(
+                                sessionCount: session.transcriptSessions.count,
+                                clearAll: {
+                                    isClearTranscriptSessionsConfirmationPresented = true
+                                }
+                            )
+
+                            ForEach(session.transcriptSessions) { transcriptSession in
+                                TranscriptSessionSection(
+                                    title: AppText.previousSession,
+                                    subtitle: transcriptSession.languageSummary,
+                                    startedAt: transcriptSession.startedAt,
+                                    lines: transcriptSession.lines,
+                                    isExpanded: transcriptSession.isExpanded,
+                                    canToggle: true,
+                                    emptyMessage: AppText.noCaptionsYet,
+                                    delete: {
+                                        transcriptSessionIDPendingDeletion = transcriptSession.id
+                                    },
+                                    toggle: {
+                                        session.toggleTranscriptSession(transcriptSession.id)
+                                    }
+                                )
+                                .id(transcriptSession.id)
+                            }
+                        }
+
+                        if session.shouldShowCurrentTranscriptSession {
+                            TranscriptSessionSection(
+                                title: AppText.currentSession,
+                                subtitle: session.languageSummary,
+                                startedAt: session.currentTranscriptSessionDate,
+                                lines: session.lines,
+                                isExpanded: true,
+                                canToggle: false,
+                                emptyMessage: AppText.waitingForSessionTranscript,
+                                delete: nil,
+                                toggle: {}
+                            )
                         }
                     }
                     .padding(.vertical, 4)
                     .animation(.spring(response: 0.32, dampingFraction: 0.86), value: session.lines.count)
+                    .animation(.spring(response: 0.32, dampingFraction: 0.86), value: session.transcriptSessions)
                 }
                 .onChange(of: session.lines.last?.id) { _, id in
                     if let id {
@@ -73,6 +114,43 @@ struct CaptionBoardView: View {
         .onReceive(NotificationCenter.default.publisher(for: FloatingCaptionWindowController.visibilityDidChangeNotification)) { _ in
             syncFloatingCaptionVisibility()
         }
+        .alert(AppText.stopCaptureConfirmationTitle, isPresented: $isStopConfirmationPresented) {
+            Button(AppText.cancel, role: .cancel) {}
+            Button(AppText.stop, role: .destructive) {
+                session.stop()
+            }
+        } message: {
+            Text(AppText.stopCaptureConfirmationMessage)
+        }
+        .alert(
+            AppText.deleteTranscriptSessionConfirmationTitle,
+            isPresented: Binding(
+                get: { transcriptSessionIDPendingDeletion != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        transcriptSessionIDPendingDeletion = nil
+                    }
+                }
+            )
+        ) {
+            Button(AppText.cancel, role: .cancel) {}
+            Button(AppText.delete, role: .destructive) {
+                if let id = transcriptSessionIDPendingDeletion {
+                    session.deleteTranscriptSession(id)
+                }
+                transcriptSessionIDPendingDeletion = nil
+            }
+        } message: {
+            Text(AppText.deleteTranscriptSessionConfirmationMessage)
+        }
+        .alert(AppText.deleteAllTranscriptSessionsConfirmationTitle, isPresented: $isClearTranscriptSessionsConfirmationPresented) {
+            Button(AppText.cancel, role: .cancel) {}
+            Button(AppText.deleteAllTranscriptSessions, role: .destructive) {
+                session.deleteAllTranscriptSessions()
+            }
+        } message: {
+            Text(AppText.deleteAllTranscriptSessionsConfirmationMessage)
+        }
     }
 
     private func toggleFloatingCaptions() {
@@ -80,8 +158,12 @@ struct CaptionBoardView: View {
         syncFloatingCaptionVisibility()
     }
 
-    private func toggleCapture() {
-        session.isRunning ? session.stop() : session.start()
+    private func requestCaptureToggle() {
+        if session.isRunning {
+            isStopConfirmationPresented = true
+        } else {
+            session.start()
+        }
     }
 
     private func togglePause() {
@@ -90,6 +172,38 @@ struct CaptionBoardView: View {
 
     private func syncFloatingCaptionVisibility() {
         isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
+    }
+}
+
+private struct PreviousSessionsHeader: View {
+    let sessionCount: Int
+    let clearAll: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(AppText.previousSessions)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                Text(AppText.previousSessionCount(sessionCount))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            Button(role: .destructive, action: clearAll) {
+                Label(AppText.deleteAllTranscriptSessions, systemImage: "trash")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help(AppText.deleteAllTranscriptSessions)
+            .accessibilityLabel(AppText.deleteAllTranscriptSessions)
+        }
+        .padding(.horizontal, 2)
+        .padding(.top, 2)
     }
 }
 
@@ -115,6 +229,106 @@ private struct CaptionLineView: View {
     }
 }
 
+private struct TranscriptSessionSection: View {
+    let title: String
+    let subtitle: String
+    let startedAt: Date
+    let lines: [CaptionLine]
+    let isExpanded: Bool
+    let canToggle: Bool
+    let emptyMessage: String
+    let delete: (() -> Void)?
+    let toggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                if canToggle {
+                    Button(action: toggle) {
+                        headerContent
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(title)
+                } else {
+                    headerContent
+                }
+
+                if let delete {
+                    Button(role: .destructive, action: delete) {
+                        Label(AppText.delete, systemImage: "trash")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .help(AppText.deleteTranscriptSession)
+                    .accessibilityLabel(AppText.deleteTranscriptSession)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06))
+            }
+
+            if isExpanded {
+                if lines.isEmpty {
+                    Text(emptyMessage)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 96)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.08))
+                        }
+                } else {
+                    ForEach(lines) { line in
+                        CaptionLineView(line: line)
+                            .id(line.id)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+            }
+        }
+    }
+
+    private var headerContent: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(canToggle ? .secondary : .tertiary)
+                .frame(width: 14)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(AppText.lineCount(lines.count))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Text(startedAt, style: .time)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+    }
+}
+
 private struct TranscriptPane: View {
     let title: String
     let description: String
@@ -123,9 +337,25 @@ private struct TranscriptPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 8) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    copyText()
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help(AppText.copyTranscriptPane(title))
+                .accessibilityLabel(AppText.copyTranscriptPane(title))
+                .disabled(!canCopy)
+            }
 
             Text(description)
                 .font(.caption)
@@ -143,6 +373,19 @@ private struct TranscriptPane: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
         }
+    }
+
+    private var canCopy: Bool {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedText.isEmpty && trimmedText != AppText.translating
+    }
+
+    private func copyText() {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty, trimmedText != AppText.translating else { return }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(trimmedText, forType: .string)
     }
 }
 
