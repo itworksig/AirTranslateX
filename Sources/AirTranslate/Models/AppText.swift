@@ -102,6 +102,17 @@ enum AppText {
         english: "When speech resumes after this much silence, the transcript starts a new paragraph.",
         korean: "이 시간만큼 말이 멈춘 뒤 다시 시작되면 기록을 새 문단으로 나눕니다."
     )
+    static let sessionLength = localized(english: "Session Length", korean: "세션 길이")
+    static let sessionLengthStandard = localized(english: "Standard", korean: "일반")
+    static let sessionLengthThirtyMinutesOrMore = localized(english: "30+ minutes", korean: "30분 이상")
+    static let sessionLengthStandardDescription = localized(
+        english: "Keeps live updates as immediate as possible for short sessions.",
+        korean: "짧은 세션에서 실시간 반응성을 최대한 유지합니다."
+    )
+    static let sessionLengthThirtyMinutesOrMoreDescription = localized(
+        english: "Uses long-session safeguards: less frequent full-text UI updates, delayed translation bursts, and tail rendering for very long transcripts.",
+        korean: "긴 세션 보호 모드를 사용합니다. 전체 텍스트 화면 갱신과 번역 폭주를 줄이고, 아주 긴 기록은 최근 부분만 렌더링합니다."
+    )
     static let savedTranscripts = localized(english: "Saved Transcripts", korean: "저장된 기록")
     static let savedTranscriptContent = localized(
         english: "Saved Content",

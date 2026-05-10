@@ -90,6 +90,11 @@ struct SidebarView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                SessionDurationRadioGroup(
+                    selection: $session.sessionDurationMode,
+                    isDisabled: session.isRunning
+                )
+
                 Divider()
 
                 Button {
@@ -98,7 +103,7 @@ struct SidebarView: View {
                     }
                 } label: {
                     ConfigurationSummaryRow(
-                        modelTitle: session.selectedModel.title,
+                        modelTitle: "\(session.selectedModel.title) · \(session.sessionDurationMode.title)",
                         outputTitle: outputSummary,
                         isExpanded: isConfigurationExpanded
                     )
@@ -385,6 +390,45 @@ private struct CompactToggleRow: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct SessionDurationRadioGroup: View {
+    @Binding var selection: SessionDurationMode
+    let isDisabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                Image(systemName: "timer")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14)
+
+                Text(AppText.sessionLength)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+            }
+
+            Picker(AppText.sessionLength, selection: $selection) {
+                ForEach(SessionDurationMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+            .disabled(isDisabled)
+            .accessibilityLabel(AppText.sessionLength)
+
+            Text(selection.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
     }
 }
 

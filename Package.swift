@@ -11,8 +11,10 @@ let package = Package(
         .executable(name: "AirTranslate", targets: ["AirTranslate"])
     ],
     targets: [
+        .target(name: "AirTranslateCore"),
         .executableTarget(
             name: "AirTranslate",
+            dependencies: ["AirTranslateCore"],
             linkerSettings: [
                 .linkedFramework("AVFAudio"),
                 .linkedFramework("AudioToolbox"),
@@ -21,6 +23,10 @@ let package = Package(
                 .linkedFramework("Speech"),
                 .linkedFramework("Translation")
             ]
+        ),
+        .testTarget(
+            name: "AirTranslateCoreTests",
+            dependencies: ["AirTranslateCore"]
         )
     ]
 )

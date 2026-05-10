@@ -1,5 +1,6 @@
 import AVFAudio
 import AppKit
+import AirTranslateCore
 import Foundation
 import Observation
 
@@ -14,6 +15,7 @@ private enum SettingsKey {
     static let floatingCaptionLineCount = "floatingCaptionLineCount"
     static let paragraphBreakSilenceInterval = "paragraphBreakSilenceInterval"
     static let savedTranscriptContentMode = "savedTranscriptContentMode"
+    static let sessionDurationMode = "sessionDurationMode"
 }
 
 private struct TranslationRequest {
@@ -23,11 +25,22 @@ private struct TranslationRequest {
     let target: LanguageOption
 }
 
+private struct PendingCaptionPresentation {
+    let lineID: UUID
+    let sourceText: String
+    let isFinal: Bool
+    let source: LanguageOption
+    let target: LanguageOption
+}
+
 @Observable
 @MainActor
 final class TranslationSessionStore {
     private static let maxTranslationCacheEntries = 2_000
-    private static let committedRevisionSearchLimit = 2
+    private static let largeTranscriptPresentationCharacterLimit = 4_000
+    private static let largeTranscriptPresentationInterval: TimeInterval = 0.35
+    private static let largeTranscriptTranslationCharacterLimit = 4_000
+    private static let veryLargeTranscriptTranslationCharacterLimit = 10_000
     private static let floatingCaptionEarlyRevisionWindow = 0.45
     private static let floatingCaptionImmediateExtensionCharacterLimit = 28
     private static let minimumFloatingCaptionDwell = 1.4
@@ -88,6 +101,9 @@ final class TranslationSessionStore {
     var savedTranscriptContentMode = SavedTranscriptContentMode.original {
         didSet { persistSelectedSettings() }
     }
+    var sessionDurationMode = SessionDurationMode.standard {
+        didSet { persistSelectedSettings() }
+    }
     var statusMessage = AppText.ready
     var toastMessage: String?
     var toastSequence = 0
@@ -114,6 +130,9 @@ final class TranslationSessionStore {
     private var lastRecognizedWasFinal = false
     private var lastRecognitionAt = Date.distantPast
     private var currentLineID: UUID?
+    private var lastCaptionPresentationUpdateAt = Date.distantPast
+    private var pendingCaptionPresentation: PendingCaptionPresentation?
+    private var captionPresentationTask: Task<Void, Never>?
     private var transcriptCleanupTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
     private var latestTranslationRequest: TranslationRequest?
@@ -134,7 +153,6 @@ final class TranslationSessionStore {
     private var pendingTranslationSourceText = ""
     private var translatedSegmentsBySource: [String: String] = [:]
     private var translationCacheKeyOrder: [String] = []
-    private var activeAutosaveTranscriptID: String?
     private var activeAutosaveSourceText = ""
     private var activeAutosaveTranslatedText = ""
     private var isRestoringSelectedSettings = false
@@ -149,6 +167,10 @@ final class TranslationSessionStore {
         case translation
     }
 
+    private var usesLongSessionMode: Bool {
+        sessionDurationMode == .thirtyMinutesOrMore
+    }
+
     private struct SavedTranscriptFile {
         let fileName: String
         let text: String
@@ -158,11 +180,6 @@ final class TranslationSessionStore {
     private struct PartialSavedTranscript {
         var original: SavedTranscriptFile?
         var translation: SavedTranscriptFile?
-    }
-
-    private struct TranscriptUnit {
-        var separatorBefore: String
-        var text: String
     }
 
     init() {
@@ -203,6 +220,7 @@ final class TranslationSessionStore {
     func stop() {
         guard isRunning else { return }
 
+        flushPendingCaptionPresentation()
         let didSaveTranscript = flushPendingTranscriptSave()
         resetLiveSessionState(clearsVisibleLines: false)
         isPaused = false
@@ -222,6 +240,7 @@ final class TranslationSessionStore {
     func pause() {
         guard isRunning, !isPaused else { return }
 
+        flushPendingCaptionPresentation()
         transcriptCleanupTask?.cancel()
         transcriptCleanupTask = nil
         commitCurrentPartial()
@@ -241,6 +260,7 @@ final class TranslationSessionStore {
     }
 
     func prepareForTermination() {
+        flushPendingCaptionPresentation()
         _ = flushPendingTranscriptSave()
     }
 
@@ -389,11 +409,6 @@ final class TranslationSessionStore {
         if let translationFileName = selectedTranscript.translationFileName {
             try? FileManager.default.removeItem(at: transcriptURL(fileName: translationFileName))
         }
-        if activeAutosaveTranscriptID == selectedTranscript.id {
-            activeAutosaveTranscriptID = nil
-            activeAutosaveSourceText = ""
-            activeAutosaveTranslatedText = ""
-        }
         self.selectedSavedTranscriptID = nil
         savedDraftSourceText = ""
         savedDraftTranslationText = ""
@@ -417,7 +432,6 @@ final class TranslationSessionStore {
             selectedSavedTranscriptID = nil
             savedDraftSourceText = ""
             savedDraftTranslationText = ""
-            activeAutosaveTranscriptID = nil
             activeAutosaveSourceText = ""
             activeAutosaveTranslatedText = ""
         } catch {
@@ -439,6 +453,10 @@ final class TranslationSessionStore {
         lastRecognizedText = ""
         lastRecognizedWasFinal = false
         currentLineID = nil
+        lastCaptionPresentationUpdateAt = Date.distantPast
+        pendingCaptionPresentation = nil
+        captionPresentationTask?.cancel()
+        captionPresentationTask = nil
         committedSourceText = ""
         currentPartialText = ""
         pendingParagraphBreakBeforePartial = false
@@ -461,7 +479,6 @@ final class TranslationSessionStore {
         latestTranslationRequest = nil
         translationBurstStartedAt = Date.distantPast
         resetTranslationCache()
-        activeAutosaveTranscriptID = nil
         activeAutosaveSourceText = ""
         activeAutosaveTranslatedText = ""
         stopSpeaking()
@@ -561,6 +578,10 @@ final class TranslationSessionStore {
            let contentMode = SavedTranscriptContentMode(rawValue: contentModeID) {
             savedTranscriptContentMode = contentMode
         }
+        if let durationModeID = defaults.string(forKey: SettingsKey.sessionDurationMode),
+           let durationMode = SessionDurationMode(rawValue: durationModeID) {
+            sessionDurationMode = durationMode
+        }
     }
 
     private func persistSelectedSettings() {
@@ -577,6 +598,7 @@ final class TranslationSessionStore {
         defaults.set(floatingCaptionLineCount.id, forKey: SettingsKey.floatingCaptionLineCount)
         defaults.set(paragraphBreakSilenceInterval, forKey: SettingsKey.paragraphBreakSilenceInterval)
         defaults.set(savedTranscriptContentMode.id, forKey: SettingsKey.savedTranscriptContentMode)
+        defaults.set(sessionDurationMode.id, forKey: SettingsKey.sessionDurationMode)
     }
 
     private func floatingCaptionText(from text: String?) -> String {
@@ -690,11 +712,16 @@ final class TranslationSessionStore {
 
     @discardableResult
     private func flushPendingTranscriptSave() -> Bool {
+        let currentSourceText = visibleTranscript().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !currentSourceText.isEmpty {
+            activeAutosaveSourceText = currentSourceText
+        }
+
         let sourceText = activeAutosaveSourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sourceText.isEmpty else { return false }
 
         let updatedAt = Date()
-        let baseFileName = activeAutosaveTranscriptID ?? makeTranscriptFileName(for: sourceText, date: updatedAt)
+        let baseFileName = makeTranscriptFileName(for: sourceText, date: updatedAt)
         let savedFiles = savedTranscriptFiles(
             sourceText: sourceText,
             translatedText: activeAutosaveTranslatedText,
@@ -707,7 +734,6 @@ final class TranslationSessionStore {
             }
         }
 
-        activeAutosaveTranscriptID = nil
         activeAutosaveSourceText = ""
         activeAutosaveTranslatedText = ""
         loadSavedTranscripts()
@@ -868,13 +894,13 @@ final class TranslationSessionStore {
 
     private func appendCaption(
         sourceText: String,
-        recognizedLanguage: LanguageOption,
+        recognizedLanguage _: LanguageOption,
         confidence _: Double,
         isFinal: Bool
     ) async {
         guard isRunning, !isPaused else { return }
         guard sourceText != lastRecognizedText || isFinal != lastRecognizedWasFinal else { return }
-        guard let direction = translationDirection(for: sourceText, recognizedLanguage: recognizedLanguage) else { return }
+        let direction = translationDirection()
 
         let now = Date()
         let hadLongSilence = now.timeIntervalSince(lastRecognitionAt) > paragraphBreakSilenceInterval
@@ -890,36 +916,132 @@ final class TranslationSessionStore {
         lastRecognitionAt = now
         transcriptCleanupTask?.cancel()
 
-        let line: CaptionLine
         if let currentLineID,
            let index = lines.firstIndex(where: { $0.id == currentLineID }) {
             let existingLine = lines[index]
             guard updatedSourceText != existingLine.sourceText else { return }
 
-            line = CaptionLine(
-                id: existingLine.id,
-                sourceText: updatedSourceText,
-                translatedText: existingLine.translatedText,
-                translatedSourceText: existingLine.translatedSourceText,
-                createdAt: existingLine.createdAt,
-                isFinal: isFinal,
-                revision: existingLine.revision + 1
-            )
-            lines[index] = line
+            if shouldPresentCaptionUpdate(sourceText: updatedSourceText, isFinal: isFinal) {
+                clearPendingCaptionPresentation()
+                presentCaptionLineUpdate(
+                    lineID: existingLine.id,
+                    sourceText: updatedSourceText,
+                    isFinal: isFinal,
+                    source: direction.source,
+                    target: direction.target
+                )
+            } else {
+                scheduleCaptionPresentation(
+                    lineID: existingLine.id,
+                    sourceText: updatedSourceText,
+                    isFinal: isFinal,
+                    source: direction.source,
+                    target: direction.target
+                )
+            }
         } else {
-            line = CaptionLine(
+            clearPendingCaptionPresentation()
+            let line = CaptionLine(
                 sourceText: updatedSourceText,
                 translatedText: AppText.translating,
                 createdAt: Date(),
                 isFinal: isFinal,
-                revision: 1
+                revision: 1,
+                usesLongSessionDisplay: usesLongSessionMode
             )
             currentLineID = line.id
             lines.append(line)
+            lastCaptionPresentationUpdateAt = Date()
+            stageTranscriptForSave(line.sourceText)
+            requestTranslation(for: line, source: direction.source, target: direction.target)
         }
+    }
 
+    private func shouldPresentCaptionUpdate(sourceText: String, isFinal: Bool) -> Bool {
+        guard usesLongSessionMode else { return true }
+
+        let sourceLength = sourceText.utf16.count
+        guard sourceLength >= Self.largeTranscriptPresentationCharacterLimit else { return true }
+
+        let elapsed = Date().timeIntervalSince(lastCaptionPresentationUpdateAt)
+        let interval = isFinal
+            ? Self.largeTranscriptPresentationInterval / 2
+            : Self.largeTranscriptPresentationInterval
+        return elapsed >= interval
+    }
+
+    private func scheduleCaptionPresentation(
+        lineID: UUID,
+        sourceText: String,
+        isFinal: Bool,
+        source: LanguageOption,
+        target: LanguageOption
+    ) {
+        pendingCaptionPresentation = PendingCaptionPresentation(
+            lineID: lineID,
+            sourceText: sourceText,
+            isFinal: isFinal,
+            source: source,
+            target: target
+        )
+        captionPresentationTask?.cancel()
+
+        let elapsed = Date().timeIntervalSince(lastCaptionPresentationUpdateAt)
+        let delay = max(0, Self.largeTranscriptPresentationInterval - elapsed)
+        captionPresentationTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(Int(delay * 1_000)))
+            guard !Task.isCancelled else { return }
+            flushPendingCaptionPresentation()
+        }
+    }
+
+    private func flushPendingCaptionPresentation() {
+        guard let pendingCaptionPresentation else { return }
+
+        self.pendingCaptionPresentation = nil
+        captionPresentationTask?.cancel()
+        captionPresentationTask = nil
+        presentCaptionLineUpdate(
+            lineID: pendingCaptionPresentation.lineID,
+            sourceText: pendingCaptionPresentation.sourceText,
+            isFinal: pendingCaptionPresentation.isFinal,
+            source: pendingCaptionPresentation.source,
+            target: pendingCaptionPresentation.target
+        )
+    }
+
+    private func clearPendingCaptionPresentation() {
+        pendingCaptionPresentation = nil
+        captionPresentationTask?.cancel()
+        captionPresentationTask = nil
+    }
+
+    private func presentCaptionLineUpdate(
+        lineID: UUID,
+        sourceText: String,
+        isFinal: Bool,
+        source: LanguageOption,
+        target: LanguageOption
+    ) {
+        guard let index = lines.firstIndex(where: { $0.id == lineID }) else { return }
+
+        let existingLine = lines[index]
+        guard sourceText != existingLine.sourceText || isFinal != existingLine.isFinal else { return }
+
+        let line = CaptionLine(
+            id: existingLine.id,
+            sourceText: sourceText,
+            translatedText: existingLine.translatedText,
+            translatedSourceText: existingLine.translatedSourceText,
+            createdAt: existingLine.createdAt,
+            isFinal: isFinal,
+            revision: existingLine.revision + 1,
+            usesLongSessionDisplay: usesLongSessionMode
+        )
+        lines[index] = line
+        lastCaptionPresentationUpdateAt = Date()
         stageTranscriptForSave(line.sourceText)
-        requestTranslation(for: line, source: direction.source, target: direction.target)
+        requestTranslation(for: line, source: source, target: target)
     }
 
     private func accumulatedTranscript(incoming: String, hadLongSilence: Bool) -> String {
@@ -968,7 +1090,13 @@ final class TranslationSessionStore {
         allowsCommittedRevision: Bool,
         allowsCommittedReplay: Bool
     ) -> String {
-        if allowsCommittedReplay, committedTranscriptAlreadyMatches(incoming) {
+        if let replayTail = incomingTailAfterRecentCommittedReplay(incoming) {
+            syncFloatingCommittedSourceTextToCommittedSourceText()
+            return replayTail
+        }
+
+        if allowsCommittedReplay,
+           TranscriptTextProcessor.committedTranscriptAlreadyMatches(incoming, in: committedSourceText) {
             return ""
         }
 
@@ -988,113 +1116,43 @@ final class TranslationSessionStore {
         return incoming
     }
 
-    private func incomingTailAfterCommittedText(
-        _ incoming: String,
-        allowsCommittedReplay: Bool
-    ) -> String? {
-        let normalizedCommitted = normalizedTranscriptForComparison(committedSourceText)
-        let normalizedIncoming = normalizedTranscriptForComparison(incoming)
-        guard isWholeTextPrefix(normalizedCommitted, of: normalizedIncoming) else {
-            return nil
-        }
-
-        guard normalizedIncoming != normalizedCommitted else {
-            if allowsCommittedReplay,
-               transcriptUnits(from: incoming).count > 1 || shouldSuppressExactRecentRepeat(normalizedIncoming) {
-                return ""
-            }
-
-            return nil
-        }
-
-        guard let tailStart = originalIndex(
-            in: incoming,
-            afterNormalizedPrefix: normalizedCommitted
+    private func incomingTailAfterRecentCommittedReplay(_ incoming: String) -> String? {
+        guard let replay = TranscriptTextProcessor.incomingTailAfterRecentCommittedReplay(
+            incoming,
+            committedText: committedSourceText,
+            languageID: sourceLanguage.id
         ) else {
             return nil
         }
 
-        return String(incoming[tailStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        committedSourceText = replay.committedText
+        return replay.tailText
     }
 
-    private func originalIndex(
-        in text: String,
-        afterNormalizedPrefix normalizedPrefix: String
-    ) -> String.Index? {
-        guard !normalizedPrefix.isEmpty else { return text.startIndex }
-
-        var normalizedText = ""
-        var previousWasWhitespace = true
-
-        for index in text.indices {
-            let character = text[index]
-            let nextIndex = text.index(after: index)
-
-            if character.isWhitespace {
-                guard !previousWasWhitespace else { continue }
-                previousWasWhitespace = true
-                normalizedText.append(" ")
-            } else {
-                previousWasWhitespace = false
-                normalizedText.append(character)
-            }
-
-            guard normalizedPrefix.hasPrefix(normalizedText) else {
-                return nil
-            }
-
-            if normalizedText == normalizedPrefix {
-                return nextIndex
-            }
-        }
-
-        return nil
+    private func incomingTailAfterCommittedText(
+        _ incoming: String,
+        allowsCommittedReplay: Bool
+    ) -> String? {
+        TranscriptTextProcessor.incomingTailAfterCommittedText(
+            incoming,
+            committedText: committedSourceText,
+            allowsCommittedReplay: allowsCommittedReplay
+        )
     }
 
     private func isRevisionOfCurrentPartial(_ incomingPartial: String) -> Bool {
-        let normalizedCurrent = normalizedTranscriptForComparison(currentPartialText)
-        let normalizedIncoming = normalizedTranscriptForComparison(incomingPartial)
-        guard !normalizedCurrent.isEmpty, !normalizedIncoming.isEmpty else {
-            return false
-        }
-
-        if normalizedIncoming == normalizedCurrent
-            || isWholeTextPrefix(normalizedCurrent, of: normalizedIncoming)
-            || isWholeTextPrefix(normalizedIncoming, of: normalizedCurrent) {
-            return true
-        }
-
-        let sharedPrefixLength = commonPrefixLength(normalizedCurrent, normalizedIncoming)
-        let shorterLength = min(normalizedCurrent.count, normalizedIncoming.count)
-        return shorterLength >= 12 && sharedPrefixLength * 2 >= shorterLength
+        TranscriptTextProcessor.isRevisionOfCurrentPartial(
+            current: currentPartialText,
+            incoming: incomingPartial
+        )
     }
 
     private func preferredPartialText(current: String, incoming: String) -> String {
-        let normalizedCurrent = normalizedTranscriptForComparison(current)
-        let normalizedIncoming = normalizedTranscriptForComparison(incoming)
-
-        if normalizedCurrent.count > normalizedIncoming.count + 2 {
-            return current
-        }
-
-        return incoming
+        TranscriptTextProcessor.preferredPartialText(current: current, incoming: incoming)
     }
 
     private func isWholeTextPrefix(_ prefix: String, of text: String) -> Bool {
-        guard !prefix.isEmpty, text.hasPrefix(prefix) else { return false }
-        guard text != prefix else { return true }
-        guard let nextCharacter = text.dropFirst(prefix.count).first,
-              let previousCharacter = prefix.last
-        else {
-            return true
-        }
-
-        return !isLetterOrNumber(previousCharacter) || !isLetterOrNumber(nextCharacter)
-    }
-
-    private func isLetterOrNumber(_ character: Character) -> Bool {
-        let lettersAndNumbers = CharacterSet.letters.union(.decimalDigits)
-        return character.unicodeScalars.allSatisfy { lettersAndNumbers.contains($0) }
+        TranscriptTextProcessor.isWholeTextPrefix(prefix, of: text)
     }
 
     private func commitCurrentPartial() {
@@ -1133,7 +1191,11 @@ final class TranslationSessionStore {
 
         if floatingCommittedSourceText.isEmpty {
             floatingCommittedSourceText = partial
-        } else if shouldAppendCommittedPartial(partial, to: floatingCommittedSourceText) {
+        } else if shouldAppendCommittedPartial(
+            partial,
+            to: floatingCommittedSourceText,
+            pendingParagraphBreak: pendingFloatingParagraphBreakBeforePartial
+        ) {
             let separator = pendingFloatingParagraphBreakBeforePartial ? "\n\n" : "\n"
             floatingCommittedSourceText += separator + partial
         }
@@ -1290,271 +1352,49 @@ final class TranslationSessionStore {
     }
 
     private func replaceCommittedUnitsIfRevision(with text: String, allowsBackfill: Bool) -> Bool {
-        let revisedText = organizeTranscript(text, language: sourceLanguage)
-        let incomingUnits = transcriptUnits(from: revisedText)
-        guard !incomingUnits.isEmpty else { return false }
-
-        var committedUnits = transcriptUnits(from: committedSourceText)
-        guard !committedUnits.isEmpty else { return false }
-
-        if incomingUnits.count > 1 {
-            guard incomingUnits.count <= committedUnits.count else { return false }
-
-            let suffixStartIndex = committedUnits.count - incomingUnits.count
-            let suffixPairs = zip(incomingUnits, committedUnits[suffixStartIndex...])
-            guard suffixPairs.allSatisfy({
-                isLikelyRecentTranscriptRevision($0.text, of: $1.text, allowsExactRepeat: false)
-                    || normalizedTranscriptForComparison($0.text) == normalizedTranscriptForComparison($1.text)
-            }) else {
-                return false
-            }
-            guard suffixPairs.contains(where: {
-                normalizedTranscriptForComparison($0.text) != normalizedTranscriptForComparison($1.text)
-            }) else {
-                return false
-            }
-
-            for (offset, incomingUnit) in incomingUnits.enumerated() {
-                let index = suffixStartIndex + offset
-                committedUnits[index].text = preferredCommittedRevision(
-                    existing: committedUnits[index].text,
-                    incoming: incomingUnit.text
-                )
-            }
-            committedSourceText = transcriptText(from: committedUnits)
-            return true
+        guard let updatedText = TranscriptTextProcessor.committedTextByReplacingRevision(
+            with: text,
+            committedText: committedSourceText,
+            languageID: sourceLanguage.id,
+            allowsBackfill: allowsBackfill
+        ) else {
+            return false
         }
 
-        guard let incomingUnit = incomingUnits.first else { return false }
-
-        let tailIndex = committedUnits.count - 1
-        let firstSearchIndex = allowsBackfill
-            ? max(0, committedUnits.count - Self.committedRevisionSearchLimit)
-            : tailIndex
-
-        for index in stride(from: tailIndex, through: firstSearchIndex, by: -1) {
-            if index < tailIndex, committedUnits[tailIndex].separatorBefore == "\n\n" {
-                break
-            }
-
-            let existingText = committedUnits[index].text
-            let isTail = index == tailIndex
-            guard isLikelyRecentTranscriptRevision(
-                incomingUnit.text,
-                of: existingText,
-                allowsExactRepeat: isTail
-            ) else {
-                continue
-            }
-
-            committedUnits[index].text = preferredCommittedRevision(
-                existing: existingText,
-                incoming: incomingUnit.text
-            )
-            committedSourceText = transcriptText(from: committedUnits)
-            return true
-        }
-
-        return false
-    }
-
-    private func isLikelyRecentTranscriptRevision(
-        _ incoming: String,
-        of existing: String,
-        allowsExactRepeat: Bool
-    ) -> Bool {
-        let normalizedIncoming = normalizedTranscriptForComparison(incoming)
-        let normalizedExisting = normalizedTranscriptForComparison(existing)
-        guard normalizedIncoming != normalizedExisting,
-              normalizedIncoming.count >= 12,
-              normalizedExisting.count >= 12
-        else {
-            return allowsExactRepeat && shouldSuppressExactRecentRepeat(normalizedIncoming)
-        }
-
-        if isWholeTextPrefix(normalizedIncoming, of: normalizedExisting)
-            || isWholeTextPrefix(normalizedExisting, of: normalizedIncoming) {
-            return true
-        }
-
-        let incomingTokens = transcriptTokens(from: normalizedIncoming)
-        let existingTokens = transcriptTokens(from: normalizedExisting)
-        let smallerCount = min(incomingTokens.count, existingTokens.count)
-        guard smallerCount >= 5 else { return false }
-
-        let sharedPrefixLength = commonPrefixLength(normalizedIncoming, normalizedExisting)
-        let overlapCount = orderedTokenOverlapCount(incomingTokens, existingTokens)
-        let overlapRatio = Double(overlapCount) / Double(smallerCount)
-        let shorterLength = min(normalizedIncoming.count, normalizedExisting.count)
-        let longerLength = max(normalizedIncoming.count, normalizedExisting.count)
-        let lengthRatio = Double(longerLength) / Double(shorterLength)
-
-        if sharedPrefixLength >= 8,
-           overlapCount >= 4,
-           overlapRatio >= 0.58,
-           lengthRatio <= 2.25 {
-            return true
-        }
-
-        if overlapCount >= 8,
-           overlapRatio >= 0.74,
-           lengthRatio <= 1.35 {
-            return true
-        }
-
-        return overlapCount >= 5
-            && overlapRatio >= 0.78
-            && lengthRatio <= 1.6
-    }
-
-    private func preferredCommittedRevision(existing: String, incoming: String) -> String {
-        let normalizedExisting = normalizedTranscriptForComparison(existing)
-        let normalizedIncoming = normalizedTranscriptForComparison(incoming)
-
-        if normalizedIncoming.count * 5 >= normalizedExisting.count * 3 {
-            return incoming
-        }
-
-        return existing
-    }
-
-    private func orderedTokenOverlapCount(_ lhs: [String], _ rhs: [String]) -> Int {
-        guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
-
-        var previousRow = Array(repeating: 0, count: rhs.count + 1)
-        for lhsToken in lhs {
-            var currentRow = Array(repeating: 0, count: rhs.count + 1)
-            for (rhsIndex, rhsToken) in rhs.enumerated() {
-                if lhsToken == rhsToken {
-                    currentRow[rhsIndex + 1] = previousRow[rhsIndex] + 1
-                } else {
-                    currentRow[rhsIndex + 1] = max(previousRow[rhsIndex + 1], currentRow[rhsIndex])
-                }
-            }
-            previousRow = currentRow
-        }
-
-        return previousRow[rhs.count]
-    }
-
-    private func transcriptTokens(from text: String) -> [String] {
-        let allowedCharacters = CharacterSet.letters
-            .union(.decimalDigits)
-            .union(.whitespacesAndNewlines)
-        let filteredText = String(text.unicodeScalars.map { scalar in
-            allowedCharacters.contains(scalar) ? Character(scalar) : " "
-        })
-
-        return filteredText
-            .lowercased()
-            .split(separator: " ")
-            .map(String.init)
-            .filter { $0.count > 1 }
-    }
-
-    private func committedTranscriptAlreadyMatches(_ text: String) -> Bool {
-        committedTranscriptAlreadyMatches(text, in: committedSourceText)
-    }
-
-    private func committedTranscriptAlreadyMatches(_ text: String, in committedText: String) -> Bool {
-        let committed = committedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !committed.isEmpty else { return false }
-
-        let normalizedCommitted = normalizedTranscriptForComparison(committed)
-        let normalizedText = normalizedTranscriptForComparison(text)
-        guard !normalizedText.isEmpty else { return false }
-
-        return normalizedCommitted == normalizedText
-            && (transcriptUnits(from: committed).count > 1 || shouldSuppressExactRecentRepeat(normalizedText))
+        committedSourceText = updatedText
+        return true
     }
 
     private func shouldAppendCommittedPartial(_ partial: String) -> Bool {
-        shouldAppendCommittedPartial(partial, to: committedSourceText)
+        shouldAppendCommittedPartial(
+            partial,
+            to: committedSourceText,
+            pendingParagraphBreak: pendingParagraphBreakBeforePartial
+        )
     }
 
-    private func shouldAppendCommittedPartial(_ partial: String, to committedText: String) -> Bool {
-        let normalizedPartial = normalizedTranscriptForComparison(partial)
-        guard !normalizedPartial.isEmpty else { return false }
-
-        guard !committedTranscriptAlreadyMatches(partial, in: committedText) else { return false }
-
-        let partialUnits = transcriptUnits(from: partial)
-        let committedUnits = transcriptUnits(from: committedText)
-        guard partialUnits.count == 1,
-              let partialUnit = partialUnits.first,
-              let lastCommittedUnit = committedUnits.last
-        else {
-            return true
-        }
-
-        let normalizedPartialUnit = normalizedTranscriptForComparison(partialUnit.text)
-        let normalizedLastUnit = normalizedTranscriptForComparison(lastCommittedUnit.text)
-        return normalizedPartialUnit != normalizedLastUnit
-            || pendingParagraphBreakBeforePartial
-            || !shouldSuppressExactRecentRepeat(normalizedPartialUnit)
-    }
-
-    private func shouldSuppressExactRecentRepeat(_ normalizedText: String) -> Bool {
-        normalizedText.count >= 15
-            && transcriptTokens(from: normalizedText).count >= 4
+    private func shouldAppendCommittedPartial(
+        _ partial: String,
+        to committedText: String,
+        pendingParagraphBreak: Bool
+    ) -> Bool {
+        TranscriptTextProcessor.shouldAppendCommittedPartial(
+            partial,
+            to: committedText,
+            pendingParagraphBreak: pendingParagraphBreak
+        )
     }
 
     private func transcriptUnits(from text: String) -> [TranscriptUnit] {
-        var units: [TranscriptUnit] = []
-        var buffer = ""
-        var newlineCount = 0
-        var separatorForNext = ""
-        let normalizedText = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-
-        func appendBufferedUnit() {
-            let trimmedText = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedText.isEmpty else {
-                buffer = ""
-                return
-            }
-
-            let separator = units.isEmpty ? "" : (separatorForNext.isEmpty ? "\n" : separatorForNext)
-            units.append(TranscriptUnit(separatorBefore: separator, text: trimmedText))
-            buffer = ""
-            separatorForNext = ""
-        }
-
-        for character in normalizedText {
-            if character == "\n" {
-                appendBufferedUnit()
-                newlineCount += 1
-                continue
-            }
-
-            if newlineCount > 0 {
-                separatorForNext = newlineCount >= 2 ? "\n\n" : "\n"
-                newlineCount = 0
-            }
-            buffer.append(character)
-        }
-
-        appendBufferedUnit()
-        return units
+        TranscriptTextProcessor.transcriptUnits(from: text)
     }
 
     private func transcriptText(from units: [TranscriptUnit]) -> String {
-        units.enumerated().map { index, unit in
-            if index == 0 {
-                return unit.text
-            }
-
-            let separator = unit.separatorBefore.isEmpty ? "\n" : unit.separatorBefore
-            return separator + unit.text
-        }
-        .joined()
+        TranscriptTextProcessor.transcriptText(from: units)
     }
 
     private func normalizedTranscriptForComparison(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        TranscriptTextProcessor.normalizedForComparison(text)
     }
 
     private func visibleTranscript() -> String {
@@ -1599,6 +1439,10 @@ final class TranslationSessionStore {
     }
 
     private func organizeCurrentTranscript(sourceTextOverride: String? = nil) {
+        if sourceTextOverride == nil {
+            flushPendingCaptionPresentation()
+        }
+
         guard isRunning,
               let currentLineID,
               let index = lines.firstIndex(where: { $0.id == currentLineID })
@@ -1638,7 +1482,8 @@ final class TranslationSessionStore {
             translatedSourceText: line.translatedSourceText,
             createdAt: line.createdAt,
             isFinal: line.isFinal,
-            revision: line.revision + 1
+            revision: line.revision + 1,
+            usesLongSessionDisplay: usesLongSessionMode
         )
 
         // Keep floating captions stable while cleanup rewrites the saved transcript.
@@ -1663,39 +1508,21 @@ final class TranslationSessionStore {
         language: LanguageOption,
         appliesLint: Bool
     ) -> String {
-        paragraphParts(from: text)
+        if !appliesLint {
+            return TranscriptTextProcessor.organizeTranscript(text, languageID: language.id)
+        }
+
+        return paragraphParts(from: text)
             .map {
                 let organized = organizeParagraph($0, language: language)
-                return appliesLint ? lintParagraph(organized, language: language) : organized
+                return lintParagraph(organized, language: language)
             }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
     }
 
     private func organizeParagraph(_ text: String, language: LanguageOption) -> String {
-        var organized = text
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        organized = organized.replacingOccurrences(
-            of: #"([.!?。！？]+)\s+"#,
-            with: "$1\n",
-            options: .regularExpression
-        )
-
-        if language.id == "ko-KR" {
-            organized = organized.replacingOccurrences(
-                of: #"(습니다|니다|어요|아요|세요|군요|네요|죠|지요|다)\s+"#,
-                with: "$1\n",
-                options: .regularExpression
-            )
-        }
-
-        return organized
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
+        TranscriptTextProcessor.organizeParagraph(text, languageID: language.id)
     }
 
     private func lintParagraph(_ text: String, language: LanguageOption) -> String {
@@ -1844,16 +1671,7 @@ final class TranslationSessionStore {
     }
 
     private func paragraphParts(from text: String) -> [String] {
-        let marker = "\u{1E}"
-        let normalized = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            .replacingOccurrences(of: #"[ \t]*\n{2,}[ \t]*"#, with: marker, options: .regularExpression)
-
-        return normalized
-            .components(separatedBy: marker)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        TranscriptTextProcessor.paragraphParts(from: text)
     }
 
     private func translateTranscript(
@@ -1954,7 +1772,7 @@ final class TranslationSessionStore {
             latestTranslationRequest = nil
 
             do {
-                let delay = translationDebounceDelay()
+                let delay = translationDebounceDelay(for: request.sourceText)
                 if delay > 0 {
                     try await Task.sleep(for: .milliseconds(delay))
                 }
@@ -1985,7 +1803,17 @@ final class TranslationSessionStore {
         translationTask = nil
     }
 
-    private func translationDebounceDelay() -> Int {
+    private func translationDebounceDelay(for sourceText: String) -> Int {
+        if usesLongSessionMode {
+            let sourceLength = sourceText.utf16.count
+            if sourceLength >= Self.veryLargeTranscriptTranslationCharacterLimit {
+                return 900
+            }
+            if sourceLength >= Self.largeTranscriptTranslationCharacterLimit {
+                return 450
+            }
+        }
+
         guard translationBurstStartedAt != .distantPast else { return 45 }
         let burstAge = Date().timeIntervalSince(translationBurstStartedAt)
         return burstAge >= 0.45 ? 0 : 70
@@ -2013,7 +1841,8 @@ final class TranslationSessionStore {
             translatedSourceText: sourceText,
             createdAt: line.createdAt,
             isFinal: line.isFinal,
-            revision: lines[index].revision + 1
+            revision: lines[index].revision + 1,
+            usesLongSessionDisplay: usesLongSessionMode
         )
 
         updateFloatingTranslationPresentation(floatingTranslatedText, sourceText: sourceText)
@@ -2088,10 +1917,7 @@ final class TranslationSessionStore {
             || isWholeTextPrefix(normalizedSourceText, of: normalizedOrganizedDisplaySourceText)
     }
 
-    private func translationDirection(
-        for text: String,
-        recognizedLanguage: LanguageOption
-    ) -> (source: LanguageOption, target: LanguageOption)? {
+    private func translationDirection() -> (source: LanguageOption, target: LanguageOption) {
         (sourceLanguage, targetLanguage)
     }
 

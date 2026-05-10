@@ -2,13 +2,11 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="AirTranslate"
-BUNDLE_ID="dev.appcaster.AirTranslate"
-VERSION="1.1.0"
-BUILD_NUMBER="110"
-MIN_SYSTEM_VERSION="26.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$ROOT_DIR/script"
+# shellcheck source=app_metadata.sh
+source "$SCRIPT_DIR/app_metadata.sh"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
@@ -32,40 +30,7 @@ cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_RESOURCES/AppIcon.icns"
 
-cat >"$INFO_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>$APP_NAME</string>
-  <key>CFBundleIdentifier</key>
-  <string>$BUNDLE_ID</string>
-  <key>CFBundleName</key>
-  <string>$APP_NAME</string>
-  <key>CFBundleIconFile</key>
-  <string>AppIcon</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>$VERSION</string>
-  <key>CFBundleVersion</key>
-  <string>$BUILD_NUMBER</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>$MIN_SYSTEM_VERSION</string>
-  <key>NSAppleEventsUsageDescription</key>
-  <string>AirTranslate does not automate other apps.</string>
-  <key>NSSpeechRecognitionUsageDescription</key>
-  <string>AirTranslate transcribes Mac audio so it can show translated captions.</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>AirTranslate may use speech services that require audio recognition permission.</string>
-  <key>NSSystemAudioCaptureUsageDescription</key>
-  <string>AirTranslate captures Mac system audio so it can transcribe and translate what is playing.</string>
-  <key>NSPrincipalClass</key>
-  <string>NSApplication</string>
-</dict>
-</plist>
-PLIST
+"$SCRIPT_DIR/write_info_plist.sh" "$INFO_PLIST" local
 
 select_code_sign_identity() {
   if [[ -n "$CODE_SIGN_IDENTITY" ]]; then

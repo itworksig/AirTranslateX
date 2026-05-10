@@ -120,12 +120,16 @@ private struct CaptionLineView: View {
                 title: AppText.original,
                 description: AppText.originalDescription,
                 text: line.sourceText,
+                displayText: line.sourceDisplayText,
+                revision: line.revision,
                 isPrimary: true
             )
             TranscriptPane(
                 title: AppText.translation,
                 description: AppText.translationDescription,
                 text: line.translatedText,
+                displayText: line.translatedDisplayText,
+                revision: line.revision,
                 isPrimary: false
             )
         }
@@ -138,6 +142,8 @@ private struct TranscriptPane: View {
     let title: String
     let description: String
     let text: String
+    let displayText: String
+    let revision: Int
     let isPrimary: Bool
     @State private var isTextOverflowing = false
     @State private var isReadingBack = false
@@ -184,7 +190,8 @@ private struct TranscriptPane: View {
                 .foregroundStyle(.tertiary)
 
             ScrollableTranscriptText(
-                text: text,
+                text: displayText,
+                revision: revision,
                 weight: isPrimary ? .regular : .medium,
                 isOverflowing: $isTextOverflowing,
                 isReadingBack: $isReadingBack
@@ -283,6 +290,7 @@ private struct TranscriptScrollFadeMask: View {
 
 private struct ScrollableTranscriptText: NSViewRepresentable {
     let text: String
+    let revision: Int
     let weight: NSFont.Weight
     @Binding var isOverflowing: Bool
     @Binding var isReadingBack: Bool
@@ -327,6 +335,13 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
+        let contentWidth = scrollView.contentSize.width
+        let textChanged = context.coordinator.lastRevision != revision
+            || context.coordinator.lastTextLength != text.utf16.count
+        let widthChanged = abs(context.coordinator.lastContentWidth - contentWidth) > 0.5
+        let weightChanged = context.coordinator.lastWeight != weight
+        guard textChanged || widthChanged || weightChanged else { return }
+
         let shouldStayPinnedToBottom = isPinnedToBottom(scrollView)
         if textView.string != text {
             textView.string = text
@@ -335,10 +350,16 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
         textView.font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: weight)
         textView.textColor = .labelColor
         textView.textContainer?.containerSize = NSSize(
-            width: scrollView.contentSize.width,
+            width: contentWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
         let documentHeight = updateDocumentSize(textView, in: scrollView)
+        context.coordinator.recordLayoutInput(
+            revision: revision,
+            textLength: text.utf16.count,
+            contentWidth: contentWidth,
+            weight: weight
+        )
         let isOverflowing = documentHeight > scrollView.contentSize.height + 1
         context.coordinator.updateState(
             isOverflowing: isOverflowing,
@@ -381,6 +402,10 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
         private var isOverflowing: Binding<Bool>
         private var isReadingBack: Binding<Bool>
         private weak var scrollView: NSScrollView?
+        var lastRevision: Int?
+        var lastTextLength = -1
+        var lastContentWidth: CGFloat = -1
+        var lastWeight: NSFont.Weight?
 
         init(isOverflowing: Binding<Bool>, isReadingBack: Binding<Bool>) {
             self.isOverflowing = isOverflowing
@@ -410,6 +435,18 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
 
             self.isOverflowing.wrappedValue = isOverflowing
             self.isReadingBack.wrappedValue = isReadingBack
+        }
+
+        func recordLayoutInput(
+            revision: Int,
+            textLength: Int,
+            contentWidth: CGFloat,
+            weight: NSFont.Weight
+        ) {
+            lastRevision = revision
+            lastTextLength = textLength
+            lastContentWidth = contentWidth
+            lastWeight = weight
         }
 
         @objc private func contentBoundsDidChange() {
