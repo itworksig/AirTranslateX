@@ -24,7 +24,7 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
     }
 
     @MainActor
-    func start() async throws {
+    func start(sampleRate: Int = 16_000) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
         guard let display = content.displays.first else {
@@ -38,7 +38,7 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         configuration.capturesAudio = true
         configuration.excludesCurrentProcessAudio = true
-        configuration.sampleRate = 16_000
+        configuration.sampleRate = sampleRate
         configuration.channelCount = 1
 
         let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)

@@ -169,6 +169,43 @@ struct SidebarView: View {
             }
 
             InlineSettingsGroup(
+                systemImage: "sparkles",
+                title: AppText.gptModels
+            ) {
+                VStack(spacing: 6) {
+                    GPTModelMenuRow(
+                        title: AppText.gptTranscriptionModel,
+                        systemImage: "waveform",
+                        value: session.openAITranscriptionModel.title
+                    ) {
+                        ForEach(OpenAIRealtimeTranscriptionModel.allCases) { model in
+                            Button(model.title) {
+                                session.openAITranscriptionModel = model
+                            }
+                        }
+                    }
+
+                    GPTModelMenuRow(
+                        title: AppText.gptTranslationModel,
+                        systemImage: "globe.asia.australia.fill",
+                        value: session.openAITranslationModel.title
+                    ) {
+                        ForEach(OpenAIRealtimeTranslationModel.allCases) { model in
+                            Button(model.title) {
+                                session.openAITranslationModel = model
+                            }
+                        }
+                    }
+
+                    Text(AppText.gptModelsDescription)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 8)
+                }
+            }
+
+            InlineSettingsGroup(
                 systemImage: "externaldrive.badge.checkmark",
                 title: AppText.requiredAssets
             ) {
@@ -181,7 +218,7 @@ struct SidebarView: View {
                         session.downloadModelAssets(for: .appleSpeechOnly)
                     }
 
-                    if session.selectedModel == .appleSystem {
+                    if session.selectedModel == .appleSystem || session.openAITranscriptionModel.isEnabled {
                         AssetAvailabilityRow(
                             title: AppText.translationLanguagePack,
                             availability: session.modelAvailability(for: .appleOnDevice),
@@ -390,6 +427,47 @@ private struct CompactToggleRow: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct GPTModelMenuRow<MenuContent: View>: View {
+    let title: String
+    let systemImage: String
+    let value: String
+    @ViewBuilder let menuContent: MenuContent
+
+    var body: some View {
+        Menu {
+            menuContent
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 16)
+
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 6)
+
+                Text(value)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(title)
     }
 }
 

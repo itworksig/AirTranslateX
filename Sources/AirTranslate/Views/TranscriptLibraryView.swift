@@ -149,6 +149,22 @@ struct TranscriptLibraryView: View {
                     Spacer(minLength: 0)
 
                     Button {
+                        session.polishSelectedTranscriptDraftWithFoundationModel()
+                    } label: {
+                        if session.isFoundationTranscriptCleanupRunning {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 28, height: 28)
+                        } else {
+                            Label(AppText.foundationModelCleanupShort, systemImage: "sparkles")
+                                .font(.caption.weight(.semibold))
+                        }
+                    }
+                    .disabled(!canCopyDraft || session.isFoundationTranscriptCleanupRunning)
+                    .help(AppText.foundationModelCleanupHelp)
+                    .accessibilityLabel(AppText.foundationModelCleanup)
+
+                    Button {
                         if copyDraftText() {
                             showCopyFeedback()
                         }

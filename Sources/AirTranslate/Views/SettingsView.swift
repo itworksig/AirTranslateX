@@ -2,9 +2,39 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var session: TranslationSessionStore
+    @State private var openAIAPIKey = ""
 
     var body: some View {
         Form {
+            Section(AppText.openAIAPIKey) {
+                SecureField(AppText.openAIAPIKeyPlaceholder, text: $openAIAPIKey)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Text(session.hasOpenAIAPIKey ? AppText.openAIAPIKeyConfigured : AppText.openAIAPIKeyNotConfigured)
+                        .font(.caption)
+                        .foregroundStyle(session.hasOpenAIAPIKey ? .green : .secondary)
+
+                    Spacer()
+
+                    Button(AppText.saveOpenAIAPIKey) {
+                        session.saveOpenAIAPIKey(openAIAPIKey)
+                        openAIAPIKey = ""
+                    }
+                    .disabled(openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button(AppText.removeOpenAIAPIKey) {
+                        session.removeOpenAIAPIKey()
+                        openAIAPIKey = ""
+                    }
+                    .disabled(!session.hasOpenAIAPIKey)
+                }
+
+                Text(AppText.openAIAPIKeyDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section(AppText.transcript) {
                 Picker(AppText.sessionLength, selection: $session.sessionDurationMode) {
                     ForEach(SessionDurationMode.allCases) { mode in

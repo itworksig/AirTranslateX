@@ -70,6 +70,14 @@ enum ModelAvailabilityChecker {
         )
     }
 
+    static func openAIAvailability() -> ModelAvailability {
+        let hasAPIKey = OpenAIAPIKeyStore.hasAPIKey()
+        return ModelAvailability(
+            state: hasAPIKey ? .installed : .unavailable,
+            detail: AppText.openAIModelAvailabilityDetail(hasAPIKey: hasAPIKey)
+        )
+    }
+
     private static func combinedState(_ states: [ModelAvailabilityState]) -> ModelAvailabilityState {
         if states.contains(.failed) { return .failed }
         if states.contains(.unavailable) { return .unavailable }

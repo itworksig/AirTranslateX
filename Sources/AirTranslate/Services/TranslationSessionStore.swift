@@ -8,6 +8,8 @@ private enum SettingsKey {
     static let sourceLanguageID = "sourceLanguageID"
     static let targetLanguageID = "targetLanguageID"
     static let selectedModelID = "selectedModelID"
+    static let openAITranscriptionModelID = "openAITranscriptionModelID"
+    static let openAITranslationModelID = "openAITranslationModelID"
     static let isDubbingEnabled = "isDubbingEnabled"
     static let isTranscriptLintEnabled = "isTranscriptLintEnabled"
     static let floatingCaptionDisplayMode = "floatingCaptionDisplayMode"
@@ -81,6 +83,23 @@ final class TranslationSessionStore {
             persistSelectedSettings()
             resetTranslationCache()
             resetDubbingProgress()
+            refreshModelAvailability()
+        }
+    }
+    var hasOpenAIAPIKey = OpenAIAPIKeyStore.hasAPIKey()
+    var openAITranscriptionModel = OpenAIRealtimeTranscriptionModel.off {
+        didSet {
+            persistSelectedSettings()
+            resetTranslationCache()
+            refreshModelAvailability()
+        }
+    }
+    var openAITranslationModel = OpenAIRealtimeTranslationModel.off {
+        didSet {
+            persistSelectedSettings()
+            resetTranslationCache()
+            resetDubbingProgress()
+            refreshModelAvailability()
         }
     }
     var isTranscriptLintEnabled = false {
@@ -112,6 +131,7 @@ final class TranslationSessionStore {
     var selectedSavedTranscriptID: String?
     var savedDraftSourceText = ""
     var savedDraftTranslationText = ""
+    var isFoundationTranscriptCleanupRunning = false
     private(set) var latestAudioLevel: Float?
     var modelAvailabilityByModelID = Dictionary(
         uniqueKeysWithValues: IntelligenceModel.allCases.map {
@@ -121,7 +141,10 @@ final class TranslationSessionStore {
 
     private let capture = SystemAudioCapture()
     private let transcriber = LiveSpeechTranscriber()
+    private let openAITranscriber = OpenAIRealtimeTranscriber()
     private let translator = AppleTranslationService()
+    private let openAITranslator = OpenAITranslationService()
+    private let foundationTranscriptPolisher = FoundationTranscriptPolisher()
     private let speechOutput = TranslatedSpeechOutput()
     private let spellChecker = NSSpellChecker.shared
     private let spellDocumentTag = NSSpellChecker.uniqueSpellDocumentTag()
@@ -186,6 +209,7 @@ final class TranslationSessionStore {
         restoreSelectedSettings()
         capture.delegate = self
         transcriber.delegate = self
+        openAITranscriber.delegate = self
         loadSavedTranscripts()
         refreshModelAvailability()
     }
@@ -195,7 +219,7 @@ final class TranslationSessionStore {
 
         resetLiveSessionState(clearsVisibleLines: true)
         isPaused = false
-        transcriber.setPaused(false)
+        setCaptionersPaused(false)
         isRunning = true
         statusMessage = AppText.checkingScreenPermission
 
@@ -205,7 +229,7 @@ final class TranslationSessionStore {
                 statusMessage = AppText.checkingSpeechPermission
                 try await startCaptioners()
                 statusMessage = AppText.startingCapture
-                try await capture.start()
+                try await capture.start(sampleRate: openAITranscriptionModel.isEnabled ? 24_000 : 16_000)
                 statusMessage = AppText.listeningForSpeech
                 warmTranslationSession()
             } catch {
@@ -224,7 +248,7 @@ final class TranslationSessionStore {
         let didSaveTranscript = flushPendingTranscriptSave()
         resetLiveSessionState(clearsVisibleLines: false)
         isPaused = false
-        transcriber.setPaused(false)
+        setCaptionersPaused(false)
         isRunning = false
         statusMessage = AppText.stopped
         stopCaptioners()
@@ -245,7 +269,7 @@ final class TranslationSessionStore {
         transcriptCleanupTask = nil
         commitCurrentPartial()
         organizeCurrentTranscript(sourceTextOverride: visibleTranscript())
-        transcriber.setPaused(true)
+        setCaptionersPaused(true)
         isPaused = true
         statusMessage = AppText.paused
     }
@@ -253,7 +277,7 @@ final class TranslationSessionStore {
     func resume() {
         guard isRunning, isPaused else { return }
 
-        transcriber.setPaused(false)
+        setCaptionersPaused(false)
         isPaused = false
         lastRecognitionAt = Date()
         statusMessage = AppText.listeningForSpeech
@@ -270,6 +294,28 @@ final class TranslationSessionStore {
         }
 
         NSWorkspace.shared.open(url)
+    }
+
+    func saveOpenAIAPIKey(_ key: String) {
+        do {
+            try OpenAIAPIKeyStore.saveAPIKey(key)
+            hasOpenAIAPIKey = true
+            statusMessage = AppText.openAIAPIKeySaved
+            refreshModelAvailability()
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func removeOpenAIAPIKey() {
+        do {
+            try OpenAIAPIKeyStore.deleteAPIKey()
+            hasOpenAIAPIKey = false
+            statusMessage = AppText.openAIAPIKeyRemoved
+            refreshModelAvailability()
+        } catch {
+            statusMessage = error.localizedDescription
+        }
     }
 
     func openTranscriptsFolder() {
@@ -401,6 +447,51 @@ final class TranslationSessionStore {
         selectSavedTranscript(selectedID)
     }
 
+    func polishSelectedTranscriptDraftWithFoundationModel() {
+        guard !isFoundationTranscriptCleanupRunning,
+              let selectedTranscript = selectedSavedTranscript
+        else {
+            return
+        }
+
+        let selectedID = selectedTranscript.id
+        let sourceText = savedDraftSourceText
+        let translationText = savedDraftTranslationText
+        let shouldPolishTranslation = selectedTranscript.isOriginalAndTranslation
+            && translationText.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil
+        guard sourceText.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil
+            || shouldPolishTranslation
+        else {
+            return
+        }
+
+        isFoundationTranscriptCleanupRunning = true
+        statusMessage = AppText.foundationModelCleanupRunning
+
+        Task { @MainActor in
+            do {
+                let cleanedSource = try await foundationTranscriptPolisher.polishTranscript(sourceText)
+                let cleanedTranslation = shouldPolishTranslation
+                    ? try await foundationTranscriptPolisher.polishTranscript(translationText)
+                    : ""
+
+                if selectedSavedTranscriptID == selectedID {
+                    if !cleanedSource.isEmpty {
+                        savedDraftSourceText = cleanedSource
+                    }
+                    if shouldPolishTranslation {
+                        savedDraftTranslationText = cleanedTranslation
+                    }
+                    statusMessage = AppText.foundationModelCleanupComplete
+                }
+            } catch {
+                statusMessage = AppText.foundationModelCleanupFailed(error.localizedDescription)
+            }
+
+            isFoundationTranscriptCleanupRunning = false
+        }
+    }
+
     func deleteSelectedTranscript() {
         guard let selectedTranscript = selectedSavedTranscript else { return }
 
@@ -440,11 +531,21 @@ final class TranslationSessionStore {
     }
 
     private func startCaptioners() async throws {
-        try await transcriber.start(languages: [sourceLanguage])
+        if openAITranscriptionModel.isEnabled {
+            try await openAITranscriber.start(language: sourceLanguage, model: openAITranscriptionModel)
+        } else {
+            try await transcriber.start(languages: [sourceLanguage])
+        }
     }
 
     private func stopCaptioners() {
         transcriber.stop()
+        openAITranscriber.stop()
+    }
+
+    private func setCaptionersPaused(_ isPaused: Bool) {
+        transcriber.setPaused(isPaused)
+        openAITranscriber.setPaused(isPaused)
     }
 
     private func resetLiveSessionState(clearsVisibleLines: Bool) {
@@ -495,6 +596,8 @@ final class TranslationSessionStore {
     }
 
     private func warmTranslationSession() {
+        guard !openAITranslationModel.isEnabled else { return }
+
         let warmSourceLanguage = sourceLanguage
         let warmTargetLanguage = targetLanguage
         let warmSelectedModel = selectedModel
@@ -549,6 +652,14 @@ final class TranslationSessionStore {
            let model = IntelligenceModel(rawValue: modelID) {
             selectedModel = model == .appleOnDevice ? .appleSystem : model
         }
+        if let modelID = defaults.string(forKey: SettingsKey.openAITranscriptionModelID),
+           let model = OpenAIRealtimeTranscriptionModel(rawValue: modelID) {
+            openAITranscriptionModel = model
+        }
+        if let modelID = defaults.string(forKey: SettingsKey.openAITranslationModelID),
+           let model = OpenAIRealtimeTranslationModel(rawValue: modelID) {
+            openAITranslationModel = model
+        }
         if defaults.object(forKey: SettingsKey.isDubbingEnabled) != nil {
             isDubbingEnabled = defaults.bool(forKey: SettingsKey.isDubbingEnabled)
         }
@@ -591,6 +702,8 @@ final class TranslationSessionStore {
         defaults.set(sourceLanguage.id, forKey: SettingsKey.sourceLanguageID)
         defaults.set(targetLanguage.id, forKey: SettingsKey.targetLanguageID)
         defaults.set(selectedModel.id, forKey: SettingsKey.selectedModelID)
+        defaults.set(openAITranscriptionModel.id, forKey: SettingsKey.openAITranscriptionModelID)
+        defaults.set(openAITranslationModel.id, forKey: SettingsKey.openAITranslationModelID)
         defaults.set(isDubbingEnabled, forKey: SettingsKey.isDubbingEnabled)
         defaults.set(isTranscriptLintEnabled, forKey: SettingsKey.isTranscriptLintEnabled)
         defaults.set(floatingCaptionDisplayMode.id, forKey: SettingsKey.floatingCaptionDisplayMode)
@@ -1700,12 +1813,22 @@ final class TranslationSessionStore {
                     continue
                 }
 
-                let translatedSegment = try await translator.translate(
-                    segment,
-                    source: source,
-                    target: target,
-                    model: selectedModel
-                )
+                let translatedSegment: String
+                if openAITranslationModel.isEnabled {
+                    translatedSegment = try await openAITranslator.translate(
+                        segment,
+                        source: source,
+                        target: target,
+                        model: openAITranslationModel
+                    )
+                } else {
+                    translatedSegment = try await translator.translate(
+                        segment,
+                        source: source,
+                        target: target,
+                        model: selectedModel
+                    )
+                }
                 try Task.checkCancellation()
                 let organizedSegment = organizeTranscript(translatedSegment, language: target)
                 cacheTranslatedSegment(organizedSegment, forKey: cacheKey)
@@ -2093,6 +2216,7 @@ final class TranslationSessionStore {
 extension TranslationSessionStore: SystemAudioCaptureDelegate {
     nonisolated func systemAudioCapture(_ capture: SystemAudioCapture, didOutput sampleBuffer: CMSampleBuffer) {
         transcriber.append(sampleBuffer)
+        openAITranscriber.append(sampleBuffer)
     }
 
     nonisolated func systemAudioCapture(_ capture: SystemAudioCapture, didReceiveAudioSampleCount count: Int, level: Float?) {

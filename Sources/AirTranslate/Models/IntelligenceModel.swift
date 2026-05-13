@@ -58,3 +58,43 @@ enum IntelligenceModel: String, CaseIterable, Identifiable {
         )
     }
 }
+
+enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
+    case off
+    case gptRealtimeWhisper = "gpt-realtime-whisper"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off:
+            AppText.localized(english: "Use Apple Speech", korean: "Apple Speech 사용")
+        case .gptRealtimeWhisper:
+            "gpt-realtime-whisper"
+        }
+    }
+
+    var isEnabled: Bool {
+        self != .off
+    }
+}
+
+enum OpenAIRealtimeTranslationModel: String, CaseIterable, Identifiable {
+    case off
+    case gptRealtimeTranslate = "gpt-realtime-translate"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off:
+            AppText.localized(english: "Use Apple Translation", korean: "Apple Translation 사용")
+        case .gptRealtimeTranslate:
+            "gpt-realtime-translate"
+        }
+    }
+
+    var isEnabled: Bool {
+        self != .off
+    }
+}

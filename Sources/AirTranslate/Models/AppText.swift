@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 enum AppText {
     static var usesKorean: Bool {
@@ -48,6 +49,58 @@ enum AppText {
     static let translationLanguagePack = localized(
         english: "Translation Language Pack",
         korean: "번역 언어팩"
+    )
+    static let openAIAPIKey = localized(english: "OpenAI API Key", korean: "OpenAI API 키")
+    static let openAIAPIKeyDescription = localized(
+        english: "Enter your API key in the app. AirTranslate stores it in macOS Keychain and uses it only for OpenAI translation.",
+        korean: "앱에서 API 키를 입력하세요. AirTranslate는 키를 macOS Keychain에 저장하고 OpenAI 번역에만 사용합니다."
+    )
+    static let openAIAPIKeyPlaceholder = localized(
+        english: "Paste API key",
+        korean: "API 키 붙여넣기"
+    )
+    static let saveOpenAIAPIKey = localized(english: "Save API Key", korean: "API 키 저장")
+    static let removeOpenAIAPIKey = localized(english: "Remove API Key", korean: "API 키 삭제")
+    static let openAIAPIKeySaved = localized(
+        english: "OpenAI API key saved in Keychain.",
+        korean: "OpenAI API 키가 Keychain에 저장되었습니다."
+    )
+    static let openAIAPIKeyRemoved = localized(
+        english: "OpenAI API key removed.",
+        korean: "OpenAI API 키가 삭제되었습니다."
+    )
+    static let openAIAPIKeyConfigured = localized(
+        english: "API key saved",
+        korean: "API 키 저장됨"
+    )
+    static let openAIAPIKeyNotConfigured = localized(
+        english: "API key required",
+        korean: "API 키 필요"
+    )
+    static let openAIAPIKeyMissing = localized(
+        english: "Add an OpenAI API key in Settings before using OpenAI Translation.",
+        korean: "OpenAI 번역을 사용하려면 설정에서 OpenAI API 키를 먼저 입력하세요."
+    )
+    static let openAIAPIKeyEmpty = localized(
+        english: "Enter an OpenAI API key before saving.",
+        korean: "저장하기 전에 OpenAI API 키를 입력하세요."
+    )
+    static let openAIAPIKeyInvalidStoredValue = localized(
+        english: "The stored OpenAI API key could not be read.",
+        korean: "저장된 OpenAI API 키를 읽을 수 없습니다."
+    )
+    static let gptModels = localized(english: "GPT Models", korean: "GPT 모델")
+    static let gptTranscriptionModel = localized(
+        english: "Transcription",
+        korean: "전사"
+    )
+    static let gptTranslationModel = localized(
+        english: "Auto Translation",
+        korean: "자동번역"
+    )
+    static let gptModelsDescription = localized(
+        english: "Keep the existing Apple workflow, or selectively add OpenAI realtime transcription and translation models.",
+        korean: "기존 Apple 방식을 유지하면서 OpenAI 실시간 전사와 자동번역 모델만 선택적으로 추가합니다."
     )
     static let output = localized(english: "Output", korean: "출력")
     static let translationSettings = localized(english: "Translation Settings", korean: "번역 설정")
@@ -191,6 +244,42 @@ enum AppText {
         english: "Apple Intelligence Writing Tools",
         korean: "Apple Intelligence 글쓰기 도구"
     )
+    static let foundationModelCleanup = localized(
+        english: "Clean with Foundation Model",
+        korean: "Foundation Model로 전체 정리"
+    )
+    static let foundationModelCleanupShort = localized(
+        english: "Foundation Clean",
+        korean: "Foundation 정리"
+    )
+    static let foundationModelCleanupHelp = localized(
+        english: "Use Apple's on-device Foundation Model to clean the selected saved transcript draft. Review the result, then save edits.",
+        korean: "Apple 온디바이스 Foundation Model로 선택한 저장 기록 draft 전체를 정리합니다. 결과를 확인한 뒤 수정 저장하세요."
+    )
+    static let foundationModelCleanupRunning = localized(
+        english: "Cleaning transcript with Foundation Model...",
+        korean: "Foundation Model로 기록 정리 중..."
+    )
+    static let foundationModelCleanupComplete = localized(
+        english: "Foundation Model cleanup complete. Review and save edits.",
+        korean: "Foundation Model 정리가 완료되었습니다. 확인 후 수정 저장하세요."
+    )
+    static func foundationModelCleanupFailed(_ reason: String) -> String {
+        localized(
+            english: "Foundation Model cleanup failed: \(reason)",
+            korean: "Foundation Model 정리 실패: \(reason)"
+        )
+    }
+    static let foundationModelCleanupFrameworkUnavailable = localized(
+        english: "Foundation Models is not available in this build.",
+        korean: "이 빌드에서는 Foundation Models를 사용할 수 없습니다."
+    )
+    static func foundationModelCleanupUnavailable(_ reason: String) -> String {
+        localized(
+            english: "Foundation Model is unavailable: \(reason)",
+            korean: "Foundation Model을 사용할 수 없습니다: \(reason)"
+        )
+    }
     static func copyTranscriptPane(_ title: String) -> String {
         localized(english: "Copy \(title)", korean: "\(title) 복사")
     }
@@ -266,6 +355,44 @@ enum AppText {
         localized(
             english: "Speech: \(speechStatus). Translation: \(translationStatus).",
             korean: "음성 인식: \(speechStatus). 번역: \(translationStatus)."
+        )
+    }
+
+    static func openAIModelAvailabilityDetail(hasAPIKey: Bool) -> String {
+        localized(
+            english: hasAPIKey ? "OpenAI API key is saved in Keychain." : "Save an OpenAI API key in Settings.",
+            korean: hasAPIKey ? "OpenAI API 키가 Keychain에 저장되어 있습니다." : "설정에서 OpenAI API 키를 저장하세요."
+        )
+    }
+
+    static func openAITranslationInstructions(source: String, target: String) -> String {
+        localized(
+            english: "Translate from \(source) to \(target). Return only the translated text. Preserve paragraph breaks and line breaks.",
+            korean: "\(source)에서 \(target)로 번역하세요. 번역문만 반환하고 문단과 줄바꿈은 유지하세요."
+        )
+    }
+
+    static func openAIAPIKeychainFailed(_ status: OSStatus) -> String {
+        localized(
+            english: "Keychain operation failed: \(status).",
+            korean: "Keychain 작업 실패: \(status)."
+        )
+    }
+
+    static let openAIInvalidResponse = localized(
+        english: "OpenAI returned an invalid response.",
+        korean: "OpenAI가 올바르지 않은 응답을 반환했습니다."
+    )
+    static let openAIEmptyOutput = localized(
+        english: "OpenAI returned no translated text.",
+        korean: "OpenAI가 번역 텍스트를 반환하지 않았습니다."
+    )
+
+    static func openAIRequestFailed(statusCode: Int, message: String?) -> String {
+        let detail = message.map { ": \($0)" } ?? ""
+        return localized(
+            english: "OpenAI request failed (\(statusCode))\(detail)",
+            korean: "OpenAI 요청 실패(\(statusCode))\(detail)"
         )
     }
 
