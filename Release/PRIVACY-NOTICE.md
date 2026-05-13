@@ -17,6 +17,14 @@ AirTranslate uses Apple system frameworks, including ScreenCaptureKit, Speech, a
 
 Speech recognition and language assets may be processed or downloaded through Apple-managed system services. AirTranslate does not send audio, transcripts, or translations to a server operated by this app's developer.
 
+## Optional OpenAI GPT Mode
+
+GPT mode is optional and works only after the user provides an OpenAI API key.
+
+When GPT mode or an OpenAI translation model is enabled, AirTranslate sends the necessary audio or text to OpenAI's API to produce realtime transcription, translation, or translated audio output.
+
+OpenAI API keys are user-provided runtime data. AirTranslate stores them in macOS Keychain and does not include API keys in the source tree, release scripts, or generated release bundles.
+
 ## Permissions
 
 AirTranslate requests only permissions tied to its core function:
