@@ -68,6 +68,18 @@ AirTranslate does not ship with a backend account system.
 
 Need an API key? Open the [OpenAI API key page](https://platform.openai.com/api-keys), create a key, then paste it into AirTranslate's settings modal.
 
+## Apple Translation Language Packs
+
+Apple Mode uses macOS-managed translation languages. Before using Apple Mode with a new language pair, download the needed Apple translation language packs:
+
+1. Open **System Settings**.
+2. Go to **General > Language & Region**.
+3. Click **Translation Languages**.
+4. Click **Download** for each source and target language you want to use.
+5. Optional: turn on **On-Device Mode** if you want macOS to process supported translations on your Mac whenever possible.
+
+If a selected language pair is unavailable or not downloaded, Apple Mode translation may not start or may show an unavailable state until macOS has the required language assets.
+
 ## Permissions
 
 AirTranslate asks for the permissions required by its capture and transcription flow.
