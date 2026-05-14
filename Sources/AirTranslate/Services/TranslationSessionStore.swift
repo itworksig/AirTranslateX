@@ -367,6 +367,24 @@ final class TranslationSessionStore {
         }
     }
 
+    func useAppleDefaultMode() {
+        selectedModel = .appleSystem
+        openAITranscriptionModel = .off
+        openAITranslationModel = .off
+    }
+
+    func useGPTRealtimeMode() {
+        selectedModel = .appleSystem
+        isTranscriptLintEnabled = false
+        if !openAITranscriptionModel.isEnabled {
+            openAITranscriptionModel = .gptRealtimeWhisper
+        }
+        if !openAITranslationModel.isEnabled {
+            openAITranslationModel = .gptRealtimeTranslate
+        }
+        usePreferredLanguageForOpenAIOutput()
+    }
+
     func modelAvailability(for model: IntelligenceModel) -> ModelAvailability {
         modelAvailabilityByModelID[model.id] ?? ModelAvailability.checking(for: model)
     }
@@ -648,11 +666,15 @@ final class TranslationSessionStore {
         let warmSelectedModel = selectedModel
 
         Task { @MainActor in
-            try? await translator.prepare(
-                source: warmSourceLanguage,
-                target: warmTargetLanguage,
-                model: warmSelectedModel
-            )
+            do {
+                try await translator.prepare(
+                    source: warmSourceLanguage,
+                    target: warmTargetLanguage,
+                    model: warmSelectedModel
+                )
+            } catch {
+                statusMessage = error.localizedDescription
+            }
         }
     }
 
@@ -2004,6 +2026,24 @@ final class TranslationSessionStore {
     private func requestTranslation(for line: CaptionLine, source: LanguageOption, target: LanguageOption) {
         guard !openAITranslationModel.usesRealtimeAudioTranslation else { return }
 
+        guard selectedModel != .appleSpeechOnly else {
+            markTranslationUnavailable(
+                AppText.translationDisabledForSpeechOnly,
+                for: line,
+                matching: line.sourceText
+            )
+            return
+        }
+
+        guard source.id != target.id else {
+            markTranslationUnavailable(
+                AppText.sameLanguageTranslationUnavailable,
+                for: line,
+                matching: line.sourceText
+            )
+            return
+        }
+
         let sourceText = line.sourceText
         guard pendingTranslationSourceText != sourceText else { return }
         pendingTranslationSourceText = sourceText
@@ -2055,7 +2095,7 @@ final class TranslationSessionStore {
                 if pendingTranslationSourceText == request.sourceText {
                     pendingTranslationSourceText = ""
                 }
-                statusMessage = error.localizedDescription
+                markTranslationUnavailable(error.localizedDescription, for: request.line, matching: request.sourceText)
             }
         }
 
@@ -2106,6 +2146,34 @@ final class TranslationSessionStore {
 
         updateFloatingTranslationPresentation(floatingTranslatedText, sourceText: sourceText)
         speakTranslatedDeltaIfNeeded(organizedTranslatedText)
+    }
+
+    private func markTranslationUnavailable(_ message: String, for line: CaptionLine, matching sourceText: String) {
+        guard let index = lines.firstIndex(where: { $0.id == line.id }) else {
+            statusMessage = message
+            return
+        }
+        guard lines[index].sourceText == sourceText else {
+            statusMessage = message
+            return
+        }
+
+        if pendingTranslationSourceText == sourceText {
+            pendingTranslationSourceText = ""
+        }
+
+        lines[index] = CaptionLine(
+            id: line.id,
+            sourceText: sourceText,
+            translatedText: message,
+            translatedSourceText: sourceText,
+            createdAt: line.createdAt,
+            isFinal: line.isFinal,
+            revision: lines[index].revision + 1,
+            usesLongSessionDisplay: usesLongSessionMode
+        )
+        updateFloatingTranslationPresentation(message, sourceText: sourceText)
+        statusMessage = message
     }
 
     private func updateFloatingTranslationPresentation(_ translatedText: String, sourceText: String) {

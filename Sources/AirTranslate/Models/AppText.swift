@@ -442,6 +442,14 @@ enum AppText {
         korean: "Mac 오디오를 듣는 중, 음성을 기다리는 중..."
     )
     static let translating = localized(english: "Translating...", korean: "번역 중...")
+    static let translationDisabledForSpeechOnly = localized(
+        english: "Translation is off in Transcribe Only mode.",
+        korean: "전사만 모드에서는 번역이 꺼져 있습니다."
+    )
+    static let sameLanguageTranslationUnavailable = localized(
+        english: "Choose different source and target languages to translate.",
+        korean: "번역하려면 원문과 번역 언어를 다르게 선택하세요."
+    )
     static let untitledTranscript = localized(english: "Untitled Transcript", korean: "제목 없는 기록")
 
     static func languageSummary(source: String, target: String) -> String {

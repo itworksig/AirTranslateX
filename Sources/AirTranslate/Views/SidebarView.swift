@@ -183,19 +183,9 @@ struct SidebarView: View {
             set: { engine in
                 switch engine {
                 case .apple:
-                    session.selectedModel = .appleSystem
-                    session.openAITranscriptionModel = .off
-                    session.openAITranslationModel = .off
+                    session.useAppleDefaultMode()
                 case .gpt:
-                    session.selectedModel = .appleSystem
-                    session.isTranscriptLintEnabled = false
-                    if !session.openAITranscriptionModel.isEnabled {
-                        session.openAITranscriptionModel = .gptRealtimeWhisper
-                    }
-                    if !session.openAITranslationModel.isEnabled {
-                        session.openAITranslationModel = .gptRealtimeTranslate
-                    }
-                    session.usePreferredLanguageForOpenAIOutput()
+                    session.useGPTRealtimeMode()
                     if !session.hasOpenAIAPIKey {
                         configurationNotice = AppText.openAIAPIKeyRequiredForGPTMode
                         shouldFocusOpenAIAPIKey = true
