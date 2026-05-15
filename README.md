@@ -1,7 +1,5 @@
 ![AirTranslate hero](docs/assets/airtranslate-readme-hero.png)
 
-![AirTranslate demo](docs/assets/airtranslate-readme-demo.gif)
-
 # AirTranslate
 
 Live system-audio transcription and translation for macOS.
@@ -40,6 +38,10 @@ The default workflow uses Apple frameworks. GPT-powered realtime models are opti
 - **Optional GPT mode:** OpenAI Realtime transcription and translation can be enabled only when needed.
 - **Keychain storage:** OpenAI API keys are entered by the user and stored in macOS Keychain.
 - **Plain text history:** saved transcripts remain normal `.txt` files in Application Support.
+
+![AirTranslate demo](docs/assets/airtranslate-readme-demo.gif)
+
+> "Turn any Mac audio into live captions and translation, right where you are watching."
 
 ## Core Features
 
