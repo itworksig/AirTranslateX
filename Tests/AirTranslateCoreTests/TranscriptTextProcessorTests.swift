@@ -63,6 +63,58 @@ struct TranscriptTextProcessorTests {
     }
 
     @Test
+    func currentPartialRevisionAcceptsJapaneseInternalCorrection() {
+        let first = "するの冷たい空気をいで暖かい空気をさない日本では保温光景というのか"
+        let second = "するの冷たい空気をいで温かい空気をさない日本では保温光景というのかしら"
+        let third = "するの冷たい空気をいで暖かい空気を逃さない日本では保温光景というのかしら"
+
+        #expect(TranscriptTextProcessor.isRevisionOfCurrentPartial(
+            current: first,
+            incoming: second
+        ))
+        #expect(TranscriptTextProcessor.isRevisionOfCurrentPartial(
+            current: second,
+            incoming: third
+        ))
+        #expect(TranscriptTextProcessor.preferredPartialText(current: second, incoming: third) == third)
+    }
+
+    @Test
+    func volatileJapaneseFragmentCanBeSuperseded() {
+        #expect(TranscriptTextProcessor.isVolatileFragmentSuperseded(
+            current: "あ",
+            incoming: "するの冷たい空気をいで暖かい空気をさない"
+        ))
+        #expect(TranscriptTextProcessor.isVolatileFragmentSuperseded(
+            current: "こった",
+            incoming: "こってるビュー"
+        ))
+        #expect(!TranscriptTextProcessor.isVolatileFragmentSuperseded(
+            current: "あ。",
+            incoming: "するの冷たい空気をいで暖かい空気をさない"
+        ))
+        #expect(!TranscriptTextProcessor.isVolatileFragmentSuperseded(
+            current: "네",
+            incoming: "다음 문장으로 넘어가겠습니다"
+        ))
+    }
+
+    @Test
+    func committedJapaneseRevisionReplacesRecentLine() {
+        let committed = "するの冷たい空気をいで暖かい空気をさない日本では保温光景というのか"
+        let incoming = "するの冷たい空気をいで暖かい空気を逃さない日本では保温光景というのかしら"
+
+        let replaced = TranscriptTextProcessor.committedTextByReplacingRevision(
+            with: incoming,
+            committedText: committed,
+            languageID: "ja-JP",
+            allowsBackfill: false
+        )
+
+        #expect(replaced == incoming)
+    }
+
+    @Test
     func unrelatedPartialDoesNotReplaceCurrentPartial() {
         #expect(!TranscriptTextProcessor.isRevisionOfCurrentPartial(
             current: "방금 가",
@@ -123,5 +175,19 @@ struct TranscriptTextProcessorTests {
         ...
         stuvwxyz
         """)
+    }
+
+    @Test
+    func organizeTranscriptSplitsEnglishLivePartialIntoStableSegments() {
+        let text = """
+        It's built on top of the responses API that hundreds of thousands of developers already use. So most of you who have used our platform before should be familiar with the foundation. The second thing is ChatKit. We've heard this one loud and clear, and we're making it easy to bring great chat experiences right into your own apps.
+        """
+
+        let organized = TranscriptTextProcessor.organizeTranscript(text, languageID: "en-US")
+        let segments = organized.split(separator: "\n", omittingEmptySubsequences: true)
+
+        #expect(segments.count == 4)
+        #expect(segments.first == "It's built on top of the responses API that hundreds of thousands of developers already use.")
+        #expect(segments.last == "We've heard this one loud and clear, and we're making it easy to bring great chat experiences right into your own apps.")
     }
 }

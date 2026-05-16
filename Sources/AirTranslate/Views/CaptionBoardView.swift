@@ -7,12 +7,8 @@ struct CaptionBoardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            SessionOverviewCard(
-                title: AppText.transcriptWorkspace,
-                subtitle: session.languageSummary,
-                isRunning: session.isRunning,
-                isPaused: session.isPaused,
-                audioLevel: session.latestAudioLevel,
+            CaptionBoardHeader(
+                session: session,
                 isFloatingCaptionVisible: isFloatingCaptionVisible,
                 toggleCapture: {
                     requestCaptureToggle()
@@ -25,59 +21,7 @@ struct CaptionBoardView: View {
                 }
             )
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        if !session.hasTranscriptContent && !session.isRunning {
-                            ContentUnavailableView(
-                                AppText.noCaptionsYet,
-                                systemImage: "captions.bubble",
-                                description: Text(AppText.noCaptionsDescription)
-                            )
-                            .frame(maxWidth: .infinity, minHeight: 320)
-                            .padding(24)
-                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .strokeBorder(Color.primary.opacity(0.08))
-                            }
-                        }
-
-                        if session.shouldShowTranscript && session.lines.isEmpty {
-                            Text(AppText.waitingForTranscript)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, minHeight: 96)
-                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .strokeBorder(Color.primary.opacity(0.08))
-                                }
-                        }
-
-                        ForEach(session.lines) { line in
-                            CaptionLineView(line: line)
-                                .id(line.id)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .animation(.spring(response: 0.32, dampingFraction: 0.86), value: session.lines.count)
-                }
-                .onChange(of: session.lines.last?.id) { _, id in
-                    if let id {
-                        withAnimation(.easeOut(duration: 0.22)) {
-                            proxy.scrollTo(id, anchor: .bottom)
-                        }
-                    }
-                }
-                .onChange(of: session.lines.last?.revision) { _, _ in
-                    if let id = session.lines.last?.id {
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            CaptionTranscriptFeed(session: session)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -108,6 +52,108 @@ struct CaptionBoardView: View {
 
     private func syncFloatingCaptionVisibility() {
         isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
+    }
+}
+
+private struct CaptionBoardHeader: View {
+    @Bindable var session: TranslationSessionStore
+    let isFloatingCaptionVisible: Bool
+    let toggleCapture: () -> Void
+    let togglePause: () -> Void
+    let showFloatingCaptions: () -> Void
+
+    var body: some View {
+        SessionOverviewCard(
+            title: AppText.transcriptWorkspace,
+            subtitle: session.languageSummary,
+            isRunning: session.isRunning,
+            isPaused: session.isPaused,
+            audioLevel: session.latestAudioLevel,
+            isFloatingCaptionVisible: isFloatingCaptionVisible,
+            toggleCapture: toggleCapture,
+            togglePause: togglePause,
+            showFloatingCaptions: showFloatingCaptions
+        )
+    }
+}
+
+private struct CaptionTranscriptFeed: View {
+    @Bindable var session: TranslationSessionStore
+    @State private var longSessionAutoScrollTask: Task<Void, Never>?
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if !session.hasTranscriptContent && !session.isRunning {
+                        ContentUnavailableView(
+                            AppText.noCaptionsYet,
+                            systemImage: "captions.bubble",
+                            description: Text(AppText.noCaptionsDescription)
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 320)
+                        .padding(24)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.08))
+                        }
+                    }
+
+                    if session.shouldShowTranscript && session.lines.isEmpty {
+                        Text(AppText.waitingForTranscript)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 96)
+                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(Color.primary.opacity(0.08))
+                            }
+                    }
+
+                    ForEach(session.lines) { line in
+                        CaptionLineView(line: line)
+                            .id(line.id)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .padding(.vertical, 4)
+                .animation(.spring(response: 0.32, dampingFraction: 0.86), value: session.lines.count)
+            }
+            .onChange(of: session.lines.last?.id) { _, id in
+                if let id {
+                    withAnimation(.easeOut(duration: 0.22)) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: session.lines.last?.revision) { _, _ in
+                if let id = session.lines.last?.id {
+                    scrollToLatestRevision(id, proxy: proxy)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onDisappear {
+            longSessionAutoScrollTask?.cancel()
+            longSessionAutoScrollTask = nil
+        }
+    }
+
+    private func scrollToLatestRevision(_ id: UUID, proxy: ScrollViewProxy) {
+        guard session.shouldCoalesceTranscriptAutoScroll else {
+            proxy.scrollTo(id, anchor: .bottom)
+            return
+        }
+
+        longSessionAutoScrollTask?.cancel()
+        longSessionAutoScrollTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            proxy.scrollTo(id, anchor: .bottom)
+            longSessionAutoScrollTask = nil
+        }
     }
 }
 

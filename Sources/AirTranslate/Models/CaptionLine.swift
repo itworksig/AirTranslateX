@@ -2,7 +2,7 @@ import Foundation
 import AirTranslateCore
 
 struct CaptionLine: Identifiable, Equatable {
-    private static let maxDisplayCharacters = 12_000
+    private static let maxDisplayCharacters = 4_000
 
     let id: UUID
     let sourceText: String

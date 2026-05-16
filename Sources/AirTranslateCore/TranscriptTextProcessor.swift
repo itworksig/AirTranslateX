@@ -272,6 +272,9 @@ package enum TranscriptTextProcessor {
 
         let sharedPrefixLength = commonPrefixLength(normalizedCurrent, normalizedIncoming)
         let shorterLength = min(normalizedCurrent.count, normalizedIncoming.count)
+        if isLikelyEastAsianRevision(normalizedIncoming, of: normalizedCurrent) {
+            return true
+        }
         return shorterLength >= 12 && sharedPrefixLength * 2 >= shorterLength
     }
 
@@ -284,6 +287,29 @@ package enum TranscriptTextProcessor {
         }
 
         return incoming
+    }
+
+    package static func isVolatileFragmentSuperseded(current: String, incoming: String) -> Bool {
+        let normalizedCurrent = normalizedForComparison(current)
+        let normalizedIncoming = normalizedForComparison(incoming)
+        guard containsJapaneseKana(normalizedCurrent),
+              containsEastAsianScript(normalizedIncoming)
+        else {
+            return false
+        }
+        guard transcriptUnits(from: normalizedCurrent).count == 1,
+              transcriptUnits(from: normalizedIncoming).count == 1
+        else {
+            return false
+        }
+        guard normalizedCurrent.count <= 8,
+              normalizedIncoming.count >= max(5, normalizedCurrent.count + 2),
+              !hasTerminalPunctuation(normalizedCurrent)
+        else {
+            return false
+        }
+
+        return true
     }
 
     package static func shouldAppendCommittedPartial(
@@ -388,6 +414,9 @@ package enum TranscriptTextProcessor {
             || isPrefixEndingInsideToken(normalizedExisting, of: normalizedIncoming) {
             return true
         }
+        if isLikelyEastAsianRevision(normalizedIncoming, of: normalizedExisting) {
+            return true
+        }
         guard normalizedIncoming.count >= 12, normalizedExisting.count >= 12 else { return false }
 
         let incomingTokens = transcriptTokens(from: normalizedIncoming)
@@ -424,6 +453,48 @@ package enum TranscriptTextProcessor {
             && lengthRatio <= 1.6
     }
 
+    private static func isLikelyEastAsianRevision(_ incoming: String, of existing: String) -> Bool {
+        guard containsEastAsianScript(incoming), containsEastAsianScript(existing) else { return false }
+        let incomingLength = incoming.count
+        let existingLength = existing.count
+        let shorterLength = min(incomingLength, existingLength)
+        let longerLength = max(incomingLength, existingLength)
+        guard shorterLength >= 10 else { return false }
+        guard Double(longerLength) / Double(shorterLength) <= 1.45 else { return false }
+
+        let incomingGrams = characterNGrams(incoming, size: 2)
+        let existingGrams = characterNGrams(existing, size: 2)
+        let smallerCount = min(incomingGrams.count, existingGrams.count)
+        guard smallerCount >= 8 else { return false }
+
+        let overlapCount = multisetOverlapCount(incomingGrams, existingGrams)
+        return Double(overlapCount) / Double(smallerCount) >= 0.72
+    }
+
+    private static func characterNGrams(_ text: String, size: Int) -> [String] {
+        let characters = Array(text)
+        guard characters.count >= size else { return [] }
+
+        return (0...(characters.count - size)).map { index in
+            String(characters[index..<(index + size)])
+        }
+    }
+
+    private static func multisetOverlapCount(_ lhs: [String], _ rhs: [String]) -> Int {
+        var counts: [String: Int] = [:]
+        for item in lhs {
+            counts[item, default: 0] += 1
+        }
+
+        var overlapCount = 0
+        for item in rhs {
+            guard let count = counts[item], count > 0 else { continue }
+            overlapCount += 1
+            counts[item] = count - 1
+        }
+        return overlapCount
+    }
+
     package static func isWholeTextPrefix(_ prefix: String, of text: String) -> Bool {
         guard !prefix.isEmpty, text.hasPrefix(prefix) else { return false }
         guard text != prefix else { return true }
@@ -445,6 +516,36 @@ package enum TranscriptTextProcessor {
         }
 
         return isLetterOrNumber(previousCharacter) && isLetterOrNumber(nextCharacter)
+    }
+
+    private static func containsEastAsianScript(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x3040...0x30FF, 0x3400...0x9FFF, 0xAC00...0xD7AF:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private static func containsJapaneseKana(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x3040...0x30FF:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private static func hasTerminalPunctuation(_ text: String) -> Bool {
+        guard let lastCharacter = text.trimmingCharacters(in: .whitespacesAndNewlines).last else {
+            return false
+        }
+
+        return ".!?。！？".contains(lastCharacter)
     }
 
     private static func hasParagraphBoundaryInsideReplay(_ units: [TranscriptUnit]) -> Bool {

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AirTranslate
 
@@ -117,5 +118,26 @@ struct TranslationSessionStoreLanguageCandidateTests {
         )
 
         #expect(!shouldConfirm)
+    }
+
+    @Test
+    func longSessionCaptionLineTrimsDisplayOnly() {
+        let text = (1...500)
+            .map { "Live transcript line \($0) keeps accumulating during a long session." }
+            .joined(separator: "\n")
+        let line = CaptionLine(
+            sourceText: text,
+            translatedText: text,
+            createdAt: Date(),
+            isFinal: false,
+            usesLongSessionDisplay: true
+        )
+
+        #expect(line.sourceText == text)
+        #expect(line.translatedText == text)
+        #expect(line.sourceDisplayText != text)
+        #expect(line.translatedDisplayText != text)
+        #expect(line.sourceDisplayText.hasPrefix("..."))
+        #expect(line.translatedDisplayText.hasPrefix("..."))
     }
 }

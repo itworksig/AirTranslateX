@@ -26,6 +26,7 @@ private enum SettingsKey {
 private struct TranslationRequest {
     let line: CaptionLine
     let sourceText: String
+    let translationSourceText: String
     let source: LanguageOption
     let target: LanguageOption
 }
@@ -264,6 +265,10 @@ final class TranslationSessionStore {
 
     private var usesLongSessionMode: Bool {
         sessionDurationMode == .thirtyMinutesOrMore
+    }
+
+    var shouldCoalesceTranscriptAutoScroll: Bool {
+        usesLongSessionMode && !isUsingOpenAIRealtime
     }
 
     var isUsingOpenAIRealtime: Bool {
@@ -1358,6 +1363,7 @@ final class TranslationSessionStore {
         let updatedSourceText = accumulatedTranscript(
             incoming: sourceText,
             hadLongSilence: hadLongSilence,
+            isFinal: isFinal,
             language: direction.source
         )
         guard !updatedSourceText.isEmpty else { return }
@@ -1584,6 +1590,7 @@ final class TranslationSessionStore {
     private func accumulatedTranscript(
         incoming: String,
         hadLongSilence: Bool,
+        isFinal: Bool,
         language: LanguageOption
     ) -> String {
         let trimmedIncoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1622,6 +1629,14 @@ final class TranslationSessionStore {
 
         if isRevisionOfCurrentPartial(incomingPartial) {
             currentPartialText = preferredPartialText(current: currentPartialText, incoming: incomingPartial)
+            setFloatingCurrentPartialText(currentPartialText)
+            return visibleTranscript()
+        }
+
+        if !hadLongSilence,
+           !isFinal,
+           isVolatileFragmentSuperseded(by: incomingPartial) {
+            currentPartialText = incomingPartial
             setFloatingCurrentPartialText(currentPartialText)
             return visibleTranscript()
         }
@@ -1706,6 +1721,13 @@ final class TranslationSessionStore {
 
     private func preferredPartialText(current: String, incoming: String) -> String {
         TranscriptTextProcessor.preferredPartialText(current: current, incoming: incoming)
+    }
+
+    private func isVolatileFragmentSuperseded(by incomingPartial: String) -> Bool {
+        TranscriptTextProcessor.isVolatileFragmentSuperseded(
+            current: currentPartialText,
+            incoming: incomingPartial
+        )
     }
 
     private func isWholeTextPrefix(_ prefix: String, of text: String) -> Bool {
@@ -2431,6 +2453,7 @@ final class TranslationSessionStore {
 
         let sourceText = line.sourceText
         guard pendingTranslationSourceText != sourceText else { return }
+        let translationSourceText = translationSourceText(for: sourceText, language: source)
         pendingTranslationSourceText = sourceText
         if latestTranslationRequest == nil {
             translationBurstStartedAt = Date()
@@ -2438,6 +2461,7 @@ final class TranslationSessionStore {
         latestTranslationRequest = TranslationRequest(
             line: line,
             sourceText: sourceText,
+            translationSourceText: translationSourceText,
             source: source,
             target: target
         )
@@ -2467,7 +2491,7 @@ final class TranslationSessionStore {
 
                 translationBurstStartedAt = .distantPast
                 let translatedText = try await translateTranscript(
-                    request.sourceText,
+                    request.translationSourceText,
                     source: request.source,
                     target: request.target
                 )
@@ -2485,6 +2509,14 @@ final class TranslationSessionStore {
         }
 
         translationTask = nil
+    }
+
+    private func translationSourceText(for sourceText: String, language: LanguageOption) -> String {
+        guard usesLongSessionMode, !isUsingOpenAIRealtime else { return sourceText }
+
+        let organizedSourceText = organizeTranscript(sourceText, language: language)
+        guard !organizedSourceText.isEmpty else { return sourceText }
+        return organizedSourceText
     }
 
     private func translationDebounceDelay(for sourceText: String) -> Int {
