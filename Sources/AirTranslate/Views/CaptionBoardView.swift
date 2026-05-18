@@ -24,6 +24,7 @@ struct CaptionBoardView: View {
             CaptionTranscriptFeed(session: session)
         }
         .padding(24)
+        .background(Color(nsColor: .windowBackgroundColor))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             syncFloatingCaptionVisibility()
@@ -90,9 +91,9 @@ private struct CaptionTranscriptFeed: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(24)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.08))
             }
         } else {
@@ -109,9 +110,9 @@ private struct CaptionTranscriptFeed: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, minHeight: 96)
-                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .strokeBorder(Color.primary.opacity(0.08))
                             }
                     }
@@ -216,15 +217,15 @@ private struct TranscriptPane: View {
                 } label: {
                     Image(systemName: isCopyFeedbackVisible ? "checkmark" : "doc.on.doc")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(isCopyFeedbackVisible ? Color.accentColor : Color.secondary)
+                        .foregroundStyle(isCopyFeedbackVisible ? Color.green : Color.secondary)
                         .frame(width: 26, height: 26)
                         .background {
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(isCopyFeedbackVisible ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.05))
+                                .fill(Color(nsColor: .textBackgroundColor).opacity(0.72))
                         }
                         .overlay {
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .strokeBorder(isCopyFeedbackVisible ? Color.accentColor.opacity(0.28) : Color.primary.opacity(0.08))
+                                .strokeBorder(isCopyFeedbackVisible ? Color.green.opacity(0.32) : Color.primary.opacity(0.08))
                         }
                 }
                 .buttonStyle(TranscriptPaneCopyButtonStyle())
@@ -258,9 +259,9 @@ private struct TranscriptPane: View {
         .padding(18)
         .frame(height: 360, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
         }
     }
@@ -545,9 +546,9 @@ private struct SessionOverviewCard: View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "captions.bubble.fill")
                 .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(.secondary)
                 .frame(width: 32, height: 32)
-                .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .help("\(title) · \(subtitle)")
                 .accessibilityLabel(title)
                 .accessibilityValue(subtitle)
@@ -608,7 +609,7 @@ private struct SessionOverviewCard: View {
                 .accessibilityAddTraits(isFloatingCaptionVisible ? .isSelected : [])
             }
             .padding(5)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.72), in: Capsule())
             .overlay {
                 Capsule()
                     .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
@@ -622,10 +623,10 @@ private struct SessionOverviewCard: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .frame(minHeight: 56)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08))
         }
     }
 

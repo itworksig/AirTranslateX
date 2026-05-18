@@ -3,12 +3,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "AirTranslate",
+    name: "AirTranslateX",
     platforms: [
         .macOS(.v26)
     ],
     products: [
-        .executable(name: "AirTranslate", targets: ["AirTranslate"])
+        .executable(name: "AirTranslateX", targets: ["AirTranslate"])
     ],
     targets: [
         .target(name: "AirTranslateCore"),

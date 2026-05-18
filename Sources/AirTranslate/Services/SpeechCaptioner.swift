@@ -13,6 +13,8 @@ final class SpeechCaptioner: @unchecked Sendable {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var currentLocale: Locale?
+    private let stateLock = NSLock()
+    private var isPaused = false
 
     func start(locale: Locale) async throws {
         let authorized = await requestAuthorization()
@@ -50,7 +52,18 @@ final class SpeechCaptioner: @unchecked Sendable {
     }
 
     func append(_ sampleBuffer: CMSampleBuffer) {
+        stateLock.lock()
+        let isPaused = isPaused
+        stateLock.unlock()
+        guard !isPaused else { return }
+
         request?.appendAudioSampleBuffer(sampleBuffer)
+    }
+
+    func setPaused(_ isPaused: Bool) {
+        stateLock.lock()
+        self.isPaused = isPaused
+        stateLock.unlock()
     }
 
     func restart() async throws {
@@ -59,6 +72,7 @@ final class SpeechCaptioner: @unchecked Sendable {
     }
 
     func stop() {
+        setPaused(false)
         request?.endAudio()
         task?.cancel()
         task = nil

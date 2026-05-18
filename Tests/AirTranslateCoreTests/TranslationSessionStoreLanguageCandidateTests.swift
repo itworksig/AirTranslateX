@@ -5,6 +5,45 @@ import Testing
 @Suite
 struct TranslationSessionStoreLanguageCandidateTests {
     @Test
+    func russianIsAvailableAsASupportedLanguage() {
+        #expect(LanguageOption.supported.contains(LanguageOption.russian))
+        #expect(LanguageOption.russian.id == "ru-RU")
+        #expect(LanguageOption.russian.title == "Russian")
+    }
+
+    @Test
+    func arabicPersianAndIndonesianAreAvailableAsSupportedLanguages() {
+        #expect(LanguageOption.supported.contains(LanguageOption.arabic))
+        #expect(LanguageOption.supported.contains(LanguageOption.persian))
+        #expect(LanguageOption.supported.contains(LanguageOption.indonesian))
+        #expect(LanguageOption.arabic.id == "ar-SA")
+        #expect(LanguageOption.persian.id == "fa-IR")
+        #expect(LanguageOption.indonesian.id == "id-ID")
+    }
+
+    @Test
+    func customLLMConfigurationBuildsChatCompletionsEndpoint() {
+        let baseURLConfiguration = CustomLLMAPIConfiguration(
+            baseURL: "https://openrouter.ai/api/v1",
+            model: "openai/gpt-4o-mini"
+        )
+        #expect(baseURLConfiguration.chatCompletionsURL?.absoluteString == "https://openrouter.ai/api/v1/chat/completions")
+
+        let endpointConfiguration = CustomLLMAPIConfiguration(
+            baseURL: "https://aihubmix.com/v1/chat/completions",
+            model: "gpt-4o-mini"
+        )
+        #expect(endpointConfiguration.chatCompletionsURL?.absoluteString == "https://aihubmix.com/v1/chat/completions")
+    }
+
+    @Test
+    func aiModeUsesDeepgramAndCustomLLMDefaults() {
+        #expect(TranslationSessionStore.aiModeDefaultTranscriptionModel == .deepgramStreaming)
+        #expect(TranslationSessionStore.aiModeDefaultTranslationModel == .customLLMAPI)
+        #expect(!OpenAIRealtimeTranslationModel.customLLMAPI.usesRealtimeAudioTranslation)
+    }
+
+    @Test
     func supportedLanguageOrderIsUsedForAutoDetectionCandidateSelection() {
         let candidates = LanguageOption.prioritizedAutoDetectionCandidates(
             sourceLanguage: LanguageOption.korean,

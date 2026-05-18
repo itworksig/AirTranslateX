@@ -6,6 +6,10 @@ struct SidebarView: View {
     @State private var isLibraryPresented = false
     @State private var isConfigurationPresented = false
     @State private var openAIAPIKey = ""
+    @State private var deepgramAPIKey = ""
+    @State private var googleTranslateAPIKey = ""
+    @State private var deepLFreeAPIKey = ""
+    @State private var deepLProAPIKey = ""
     @State private var configurationNotice: String?
     @State private var shouldFocusOpenAIAPIKey = false
 
@@ -18,8 +22,8 @@ struct SidebarView: View {
             }
             .padding(12)
         }
-        .background(.bar)
-        .navigationTitle("AirTranslate")
+        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle(AppText.appName)
         .sheet(isPresented: $isLibraryPresented) {
             TranscriptLibraryView(session: session)
         }
@@ -27,6 +31,10 @@ struct SidebarView: View {
             ConfigurationSheetView(
                 session: session,
                 openAIAPIKey: $openAIAPIKey,
+                deepgramAPIKey: $deepgramAPIKey,
+                googleTranslateAPIKey: $googleTranslateAPIKey,
+                deepLFreeAPIKey: $deepLFreeAPIKey,
+                deepLProAPIKey: $deepLProAPIKey,
                 configurationNotice: $configurationNotice,
                 shouldFocusOpenAIAPIKey: $shouldFocusOpenAIAPIKey,
                 dismiss: { isConfigurationPresented = false }
@@ -75,10 +83,10 @@ struct SidebarView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08))
         }
     }
 
@@ -157,9 +165,9 @@ struct SidebarView: View {
                     } label: {
                         Image(systemName: "arrow.left.arrow.right")
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(.secondary)
                             .frame(width: 24, height: 24)
-                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .disabled(session.isRunning || session.isAppleSourceAutoDetectionEnabled)
@@ -205,20 +213,16 @@ struct SidebarView: View {
 
     private var openConfigurationButton: some View {
         Button {
-            if ProcessingEngine.current(for: session) == .gpt && !session.hasOpenAIAPIKey {
-                configurationNotice = AppText.openAIAPIKeyRequiredForGPTMode
-                shouldFocusOpenAIAPIKey = true
-            }
             isConfigurationPresented = true
         } label: {
             Image(systemName: "gearshape.fill")
                 .font(.caption.weight(.bold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(.secondary)
                 .frame(width: 26, height: 26)
-                .background(Color.accentColor.opacity(0.13), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.75), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(Color.accentColor.opacity(0.22), lineWidth: 1)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
                 }
         }
         .buttonStyle(.plain)
@@ -235,13 +239,9 @@ struct SidebarView: View {
                 switch engine {
                 case .apple:
                     session.useAppleDefaultMode()
-                case .gpt:
-                    session.useGPTRealtimeMode()
-                    if !session.hasOpenAIAPIKey {
-                        configurationNotice = AppText.openAIAPIKeyRequiredForGPTMode
-                        shouldFocusOpenAIAPIKey = true
-                        isConfigurationPresented = true
-                    }
+                case .ai:
+                    session.useAIMode()
+                    isConfigurationPresented = true
                 }
             }
         )
@@ -254,7 +254,7 @@ struct SidebarView: View {
     }
 
     private var usesOpenAIAutoLanguageFlow: Bool {
-        ProcessingEngine.current(for: session) == .gpt && session.isUsingOpenAIRealtimeTranslation
+        false
     }
 
     private var libraryCard: some View {
@@ -303,7 +303,7 @@ struct SidebarView: View {
 
 private enum ProcessingEngine: String, CaseIterable, Identifiable {
     case apple
-    case gpt
+    case ai
 
     var id: String { rawValue }
 
@@ -316,25 +316,29 @@ private enum ProcessingEngine: String, CaseIterable, Identifiable {
                 japanese: "Apple標準モード",
                 chineseSimplified: "Apple 默认模式"
             )
-        case .gpt:
+        case .ai:
             AppText.localized(
-                english: "GPT Mode",
-                korean: "GPT 모드",
-                japanese: "GPTモード",
-                chineseSimplified: "GPT 模式"
+                english: "AI Mode",
+                korean: "AI 모드",
+                japanese: "AIモード",
+                chineseSimplified: "AI 模式"
             )
         }
     }
 
     @MainActor
     static func current(for session: TranslationSessionStore) -> ProcessingEngine {
-        session.openAITranscriptionModel.isEnabled || session.openAITranslationModel.isEnabled ? .gpt : .apple
+        session.openAITranscriptionModel.isEnabled || session.openAITranslationModel.isEnabled ? .ai : .apple
     }
 }
 
 private struct ConfigurationSheetView: View {
     @Bindable var session: TranslationSessionStore
     @Binding var openAIAPIKey: String
+    @Binding var deepgramAPIKey: String
+    @Binding var googleTranslateAPIKey: String
+    @Binding var deepLFreeAPIKey: String
+    @Binding var deepLProAPIKey: String
     @Binding var configurationNotice: String?
     @Binding var shouldFocusOpenAIAPIKey: Bool
     let dismiss: () -> Void
@@ -440,12 +444,12 @@ private struct ConfigurationSheetView: View {
 
     private var openAIModelsSection: some View {
         InlineSettingsGroup(
-            systemImage: "bolt.horizontal.circle.fill",
-            title: AppText.gptModels
+            systemImage: "sparkles",
+            title: AppText.aiModels
         ) {
             VStack(spacing: 6) {
-                GPTModelMenuRow(
-                    title: AppText.gptTranscriptionModel,
+                AIModelMenuRow(
+                    title: AppText.aiTranscriptionModel,
                     systemImage: "waveform.circle.fill",
                     value: session.openAITranscriptionModel.title
                 ) {
@@ -456,8 +460,8 @@ private struct ConfigurationSheetView: View {
                     }
                 }
 
-                GPTModelMenuRow(
-                    title: AppText.gptTranslationModel,
+                AIModelMenuRow(
+                    title: AppText.aiTranslationModel,
                     systemImage: "globe",
                     value: session.openAITranslationModel.title
                 ) {
@@ -468,28 +472,129 @@ private struct ConfigurationSheetView: View {
                     }
                 }
 
-                GPTAPIKeyRow(
-                    apiKey: $openAIAPIKey,
-                    shouldFocusAPIKey: $shouldFocusOpenAIAPIKey,
-                    hasAPIKey: session.hasOpenAIAPIKey,
-                    notice: configurationNotice,
-                    save: {
-                        session.saveOpenAIAPIKey(openAIAPIKey)
-                        openAIAPIKey = ""
-                        configurationNotice = nil
-                        shouldFocusOpenAIAPIKey = false
-                    },
-                    remove: {
-                        session.removeOpenAIAPIKey()
-                        openAIAPIKey = ""
-                        if ProcessingEngine.current(for: session) == .gpt {
-                            configurationNotice = AppText.openAIAPIKeyRequiredForGPTMode
-                            shouldFocusOpenAIAPIKey = true
+                if session.openAITranslationModel == .customLLMAPI {
+                    AIAPIKeyRow(
+                        apiKey: $openAIAPIKey,
+                        shouldFocusAPIKey: $shouldFocusOpenAIAPIKey,
+                        hasAPIKey: session.hasOpenAIAPIKey,
+                        notice: configurationNotice,
+                        testMessage: session.openAIAPIConnectionTestMessage,
+                        isTesting: session.isOpenAIAPIConnectionTestRunning,
+                        save: {
+                            session.saveOpenAIAPIKey(openAIAPIKey)
+                            if session.hasOpenAIAPIKey {
+                                openAIAPIKey = ""
+                            }
+                            configurationNotice = nil
+                            shouldFocusOpenAIAPIKey = false
+                        },
+                        remove: {
+                            session.removeOpenAIAPIKey()
+                            openAIAPIKey = ""
+                        },
+                        test: {
+                            session.testOpenAIAPIConnection()
                         }
-                    }
-                )
+                    )
 
-                Text(AppText.gptModelsDescription)
+                    CustomLLMAPISettingsView(
+                        baseURL: $session.customLLMBaseURL,
+                        model: $session.customLLMModel,
+                        useOpenRouter: {
+                            session.useOpenRouterLLMPreset()
+                        },
+                        useAiHubMix: {
+                            session.useAiHubMixLLMPreset()
+                        }
+                    )
+                } else if session.openAITranslationModel == .googleTranslate {
+                    ProviderAPIKeyRow(
+                        apiKey: $googleTranslateAPIKey,
+                        provider: "Google",
+                        systemImage: "globe",
+                        placeholder: AppText.googleTranslateAPIKeyPlaceholder,
+                        hasAPIKey: session.hasGoogleTranslateAPIKey,
+                        testMessage: session.googleTranslateAPIConnectionTestMessage,
+                        isTesting: session.isGoogleTranslateAPIConnectionTestRunning,
+                        save: {
+                            session.saveGoogleTranslateAPIKey(googleTranslateAPIKey)
+                            if session.hasGoogleTranslateAPIKey { googleTranslateAPIKey = "" }
+                        },
+                        remove: {
+                            session.removeGoogleTranslateAPIKey()
+                            googleTranslateAPIKey = ""
+                        },
+                        test: {
+                            session.testGoogleTranslateAPIConnection()
+                        }
+                    )
+                } else if session.openAITranslationModel == .deepLFree {
+                    ProviderAPIKeyRow(
+                        apiKey: $deepLFreeAPIKey,
+                        provider: "DeepL Free",
+                        systemImage: "character.book.closed",
+                        placeholder: AppText.deepLAPIKeyPlaceholder,
+                        hasAPIKey: session.hasDeepLFreeAPIKey,
+                        testMessage: session.deepLFreeAPIConnectionTestMessage,
+                        isTesting: session.isDeepLFreeAPIConnectionTestRunning,
+                        save: {
+                            session.saveDeepLFreeAPIKey(deepLFreeAPIKey)
+                            if session.hasDeepLFreeAPIKey { deepLFreeAPIKey = "" }
+                        },
+                        remove: {
+                            session.removeDeepLFreeAPIKey()
+                            deepLFreeAPIKey = ""
+                        },
+                        test: {
+                            session.testDeepLFreeAPIConnection()
+                        }
+                    )
+                } else if session.openAITranslationModel == .deepLPro {
+                    ProviderAPIKeyRow(
+                        apiKey: $deepLProAPIKey,
+                        provider: "DeepL Pro",
+                        systemImage: "character.book.closed.fill",
+                        placeholder: AppText.deepLAPIKeyPlaceholder,
+                        hasAPIKey: session.hasDeepLProAPIKey,
+                        testMessage: session.deepLProAPIConnectionTestMessage,
+                        isTesting: session.isDeepLProAPIConnectionTestRunning,
+                        save: {
+                            session.saveDeepLProAPIKey(deepLProAPIKey)
+                            if session.hasDeepLProAPIKey { deepLProAPIKey = "" }
+                        },
+                        remove: {
+                            session.removeDeepLProAPIKey()
+                            deepLProAPIKey = ""
+                        },
+                        test: {
+                            session.testDeepLProAPIConnection()
+                        }
+                    )
+                }
+
+                if session.openAITranscriptionModel == .deepgramStreaming {
+                    DeepgramAPIKeyRow(
+                        apiKey: $deepgramAPIKey,
+                        hasAPIKey: session.hasDeepgramAPIKey,
+                        testMessage: session.deepgramAPIConnectionTestMessage,
+                        isTesting: session.isDeepgramAPIConnectionTestRunning,
+                        save: {
+                            session.saveDeepgramAPIKey(deepgramAPIKey)
+                            if session.hasDeepgramAPIKey {
+                                deepgramAPIKey = ""
+                            }
+                        },
+                        remove: {
+                            session.removeDeepgramAPIKey()
+                            deepgramAPIKey = ""
+                        },
+                        test: {
+                            session.testDeepgramAPIConnection()
+                        }
+                    )
+                }
+
+                Text(AppText.aiModelsDescription)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -518,25 +623,15 @@ private struct ConfigurationSheetView: View {
             title: AppText.liveOutput
         ) {
             VStack(spacing: 6) {
-                if ProcessingEngine.current(for: session) == .gpt {
-                    CompactInfoRow(
-                        title: AppText.openAINativeOutput,
-                        detail: AppText.openAINativeOutputDescription,
-                        systemImage: "sparkles"
-                    )
-                } else {
-                    CompactToggleRow(
-                        title: AppText.transcriptPolish,
-                        systemImage: "text.badge.checkmark",
-                        isOn: $session.isTranscriptLintEnabled
-                    )
-                    .help(AppText.transcriptLintDescription)
-                }
+                CompactToggleRow(
+                    title: AppText.transcriptPolish,
+                    systemImage: "text.badge.checkmark",
+                    isOn: $session.isTranscriptLintEnabled
+                )
+                .help(AppText.transcriptLintDescription)
 
                 CompactToggleRow(
-                    title: ProcessingEngine.current(for: session) == .gpt
-                        ? AppText.translatedVoiceOutput
-                        : AppText.voiceOutput,
+                    title: AppText.voiceOutput,
                     systemImage: "speaker.wave.2.fill",
                     isOn: $session.isDubbingEnabled
                 )
@@ -815,10 +910,10 @@ private struct InlineSettingsGroup<Content: View>: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.055), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
         }
     }
 }
@@ -850,7 +945,7 @@ private struct CompactToggleRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -882,11 +977,11 @@ private struct CompactInfoRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
-        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
-private struct GPTModelMenuRow<MenuContent: View>: View {
+private struct AIModelMenuRow<MenuContent: View>: View {
     let title: String
     let systemImage: String
     let value: String
@@ -920,24 +1015,84 @@ private struct GPTModelMenuRow<MenuContent: View>: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
-            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(title)
     }
 }
 
-private struct GPTAPIKeyRow: View {
+private struct CustomLLMAPISettingsView: View {
+    @Binding var baseURL: String
+    @Binding var model: String
+    let useOpenRouter: () -> Void
+    let useAiHubMix: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Button("OpenRouter") {
+                    useOpenRouter()
+                }
+                .buttonStyle(.borderless)
+
+                Button("AiHubMix") {
+                    useAiHubMix()
+                }
+                .buttonStyle(.borderless)
+
+                Spacer(minLength: 0)
+            }
+
+            LabeledContent {
+                TextField(AppText.customLLMBaseURLPlaceholder, text: $baseURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+            } label: {
+                Text(AppText.customLLMBaseURL)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            LabeledContent {
+                TextField(AppText.customLLMModelPlaceholder, text: $model)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+            } label: {
+                Text(AppText.customLLMModel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(AppText.customLLMDescription)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct AIAPIKeyRow: View {
     @Binding var apiKey: String
     @Binding var shouldFocusAPIKey: Bool
     @FocusState private var isAPIKeyFocused: Bool
     let hasAPIKey: Bool
     let notice: String?
+    let testMessage: String?
+    let isTesting: Bool
     let save: () -> Void
     let remove: () -> Void
+    let test: () -> Void
 
     private var trimmedAPIKey: String {
         apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var apiKeyPlaceholder: String {
+        hasAPIKey ? "********" : AppText.openAIAPIKeyPlaceholder
     }
 
     var body: some View {
@@ -948,7 +1103,7 @@ private struct GPTAPIKeyRow: View {
                     .foregroundStyle(hasAPIKey ? Color.green : Color.secondary)
                     .frame(width: 16)
 
-                SecureField(AppText.openAIAPIKeyPlaceholder, text: $apiKey)
+                SecureField(apiKeyPlaceholder, text: $apiKey)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
                     .focused($isAPIKeyFocused)
@@ -962,6 +1117,16 @@ private struct GPTAPIKeyRow: View {
                 .disabled(trimmedAPIKey.isEmpty)
                 .help(AppText.saveOpenAIAPIKey)
                 .accessibilityLabel(AppText.saveOpenAIAPIKey)
+
+                Button {
+                    test()
+                } label: {
+                    Image(systemName: isTesting ? "hourglass" : "network")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!hasAPIKey || isTesting)
+                .help(AppText.testOpenAIAPIKey)
+                .accessibilityLabel(AppText.testOpenAIAPIKey)
 
                 Button {
                     remove()
@@ -988,6 +1153,14 @@ private struct GPTAPIKeyRow: View {
                 .padding(.leading, 24)
             }
 
+            if let testMessage {
+                Text(testMessage)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(testMessage == AppText.openAIAPIConnectionSucceeded ? Color.green : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 24)
+            }
+
             Text(hasAPIKey ? AppText.openAIAPIKeyConfigured : AppText.openAIAPIKeyNotConfigured)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(hasAPIKey ? Color.green : Color.secondary)
@@ -995,7 +1168,7 @@ private struct GPTAPIKeyRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onAppear {
             focusAPIKeyIfNeeded()
         }
@@ -1010,6 +1183,167 @@ private struct GPTAPIKeyRow: View {
             isAPIKeyFocused = true
             shouldFocusAPIKey = false
         }
+    }
+}
+
+private struct DeepgramAPIKeyRow: View {
+    @Binding var apiKey: String
+    let hasAPIKey: Bool
+    let testMessage: String?
+    let isTesting: Bool
+    let save: () -> Void
+    let remove: () -> Void
+    let test: () -> Void
+
+    private var trimmedAPIKey: String {
+        apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var apiKeyPlaceholder: String {
+        hasAPIKey ? "********" : AppText.deepgramAPIKeyPlaceholder
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.badge.magnifyingglass")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(hasAPIKey ? Color.green : Color.secondary)
+                    .frame(width: 16)
+
+                SecureField(apiKeyPlaceholder, text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+
+                Button {
+                    save()
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .disabled(trimmedAPIKey.isEmpty)
+                .help(AppText.saveDeepgramAPIKey)
+                .accessibilityLabel(AppText.saveDeepgramAPIKey)
+
+                Button {
+                    test()
+                } label: {
+                    Image(systemName: isTesting ? "hourglass" : "network")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!hasAPIKey || isTesting)
+                .help(AppText.testDeepgramAPIKey)
+                .accessibilityLabel(AppText.testDeepgramAPIKey)
+
+                Button {
+                    remove()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!hasAPIKey)
+                .help(AppText.removeDeepgramAPIKey)
+                .accessibilityLabel(AppText.removeDeepgramAPIKey)
+            }
+
+            if let testMessage {
+                Text(testMessage)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(testMessage == AppText.deepgramAPIConnectionSucceeded ? Color.green : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 24)
+            }
+
+            Text(hasAPIKey ? AppText.deepgramAPIKeyConfigured : AppText.deepgramAPIKeyNotConfigured)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(hasAPIKey ? Color.green : Color.secondary)
+                .padding(.leading, 24)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct ProviderAPIKeyRow: View {
+    @Binding var apiKey: String
+    let provider: String
+    let systemImage: String
+    let placeholder: String
+    let hasAPIKey: Bool
+    let testMessage: String?
+    let isTesting: Bool
+    let save: () -> Void
+    let remove: () -> Void
+    let test: () -> Void
+
+    private var trimmedAPIKey: String {
+        apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var apiKeyPlaceholder: String {
+        hasAPIKey ? "********" : placeholder
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(hasAPIKey ? Color.green : Color.secondary)
+                    .frame(width: 16)
+
+                SecureField(apiKeyPlaceholder, text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+
+                Button {
+                    save()
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .disabled(trimmedAPIKey.isEmpty)
+                .help(AppText.saveOpenAIAPIKey)
+                .accessibilityLabel(AppText.saveOpenAIAPIKey)
+
+                Button {
+                    test()
+                } label: {
+                    Image(systemName: isTesting ? "hourglass" : "network")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!hasAPIKey || isTesting)
+                .help(AppText.testOpenAIAPIKey)
+                .accessibilityLabel(AppText.testOpenAIAPIKey)
+
+                Button {
+                    remove()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!hasAPIKey)
+                .help(AppText.removeOpenAIAPIKey)
+                .accessibilityLabel(AppText.removeOpenAIAPIKey)
+            }
+
+            if let testMessage {
+                Text(testMessage)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(testMessage == AppText.providerAPIConnectionSucceeded(provider) ? Color.green : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 24)
+            }
+
+            Text(hasAPIKey ? AppText.providerAPIKeyConfigured(provider) : AppText.providerAPIKeyNotConfigured(provider))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(hasAPIKey ? Color.green : Color.secondary)
+                .padding(.leading, 24)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -1174,7 +1508,7 @@ private struct ModelModeRow: View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: modelSymbolName)
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
                 .frame(width: 18, height: 18)
 
             Text(model.title)
@@ -1186,17 +1520,17 @@ private struct ModelModeRow: View {
 
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.55))
+                .foregroundStyle(isSelected ? Color.green : Color.secondary.opacity(0.55))
                 .frame(width: 18, height: 18)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background((isSelected ? Color.accentColor : Color.primary).opacity(isSelected ? 0.11 : 0.045), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .background(Color(nsColor: .textBackgroundColor).opacity(isSelected ? 0.9 : 0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder((isSelected ? Color.accentColor : Color.primary).opacity(isSelected ? 0.24 : 0.06), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(isSelected ? Color.green.opacity(0.35) : Color.primary.opacity(0.06), lineWidth: 1)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var modelSymbolName: String {
@@ -1347,10 +1681,10 @@ private struct SidebarCard<Content: View, HeaderAccessory: View>: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07))
         }
     }
 }

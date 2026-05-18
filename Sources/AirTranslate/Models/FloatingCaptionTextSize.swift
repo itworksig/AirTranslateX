@@ -21,12 +21,12 @@ enum FloatingCaptionTextSize: String, CaseIterable, Identifiable {
         }
     }
 
-    var primaryFont: Font {
-        .system(size: primaryPointSize, weight: .semibold)
+    func primaryFont(style: FloatingCaptionFontStyle) -> Font {
+        .system(size: primaryPointSize, weight: .semibold, design: style.design)
     }
 
-    var secondaryFont: Font {
-        .system(size: secondaryPointSize, weight: .medium)
+    func secondaryFont(style: FloatingCaptionFontStyle) -> Font {
+        .system(size: secondaryPointSize, weight: .medium, design: style.design)
     }
 
     var primaryLineHeight: CGFloat {

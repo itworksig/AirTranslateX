@@ -10,11 +10,18 @@ private enum SettingsKey {
     static let selectedModelID = "selectedModelID"
     static let openAITranscriptionModelID = "openAITranscriptionModelID"
     static let openAITranslationModelID = "openAITranslationModelID"
+    static let customLLMBaseURL = "customLLMBaseURL"
+    static let customLLMModel = "customLLMModel"
     static let isDubbingEnabled = "isDubbingEnabled"
     static let isTranscriptLintEnabled = "isTranscriptLintEnabled"
     static let floatingCaptionDisplayMode = "floatingCaptionDisplayMode"
+    static let floatingCaptionPlacement = "floatingCaptionPlacement"
     static let floatingCaptionTextSize = "floatingCaptionTextSize"
     static let floatingCaptionLineCount = "floatingCaptionLineCount"
+    static let floatingCaptionFontStyle = "floatingCaptionFontStyle"
+    static let floatingCaptionTextColorHex = "floatingCaptionTextColorHex"
+    static let floatingCaptionBackgroundColorHex = "floatingCaptionBackgroundColorHex"
+    static let floatingCaptionBackgroundOpacity = "floatingCaptionBackgroundOpacity"
     static let paragraphBreakSilenceInterval = "paragraphBreakSilenceInterval"
     static let savedTranscriptContentMode = "savedTranscriptContentMode"
     static let sessionDurationMode = "sessionDurationMode"
@@ -74,6 +81,9 @@ enum AutoDetectionLanguageChangePolicy {
 @Observable
 @MainActor
 final class TranslationSessionStore {
+    nonisolated static let aiModeDefaultTranscriptionModel = OpenAIRealtimeTranscriptionModel.deepgramStreaming
+    nonisolated static let aiModeDefaultTranslationModel = OpenAIRealtimeTranslationModel.customLLMAPI
+
     private static let maxTranslationCacheEntries = 2_000
     private static let largeTranscriptPresentationCharacterLimit = 4_000
     private static let largeTranscriptPresentationInterval: TimeInterval = 0.35
@@ -130,6 +140,21 @@ final class TranslationSessionStore {
         }
     }
     var hasOpenAIAPIKey = OpenAIAPIKeyStore.hasAPIKey()
+    var customLLMBaseURL = CustomLLMAPIConfiguration.openRouterBaseURL {
+        didSet {
+            persistSelectedSettings()
+            resetTranslationCache()
+        }
+    }
+    var customLLMModel = "openai/gpt-4o-mini" {
+        didSet {
+            persistSelectedSettings()
+            resetTranslationCache()
+        }
+    }
+    var customLLMConfiguration: CustomLLMAPIConfiguration {
+        CustomLLMAPIConfiguration(baseURL: customLLMBaseURL, model: customLLMModel)
+    }
     var openAITranscriptionModel = OpenAIRealtimeTranscriptionModel.off {
         didSet {
             if openAITranscriptionModel.isEnabled {
@@ -157,11 +182,33 @@ final class TranslationSessionStore {
     var floatingCaptionDisplayMode = FloatingCaptionDisplayMode.originalAndTranslation {
         didSet { persistSelectedSettings() }
     }
+    var floatingCaptionPlacement = FloatingCaptionPlacement.lowerThird {
+        didSet { persistSelectedSettings() }
+    }
     var floatingCaptionTextSize = FloatingCaptionTextSize.medium {
         didSet { persistSelectedSettings() }
     }
     var floatingCaptionLineCount = FloatingCaptionLineCount.three {
         didSet { persistSelectedSettings() }
+    }
+    var floatingCaptionFontStyle = FloatingCaptionFontStyle.rounded {
+        didSet { persistSelectedSettings() }
+    }
+    var floatingCaptionTextColorHex = "#F8F5EA" {
+        didSet { persistSelectedSettings() }
+    }
+    var floatingCaptionBackgroundColorHex = "#050505" {
+        didSet { persistSelectedSettings() }
+    }
+    var floatingCaptionBackgroundOpacity = 0.58 {
+        didSet {
+            let clampedOpacity = min(max(floatingCaptionBackgroundOpacity, 0), 1)
+            if clampedOpacity != floatingCaptionBackgroundOpacity {
+                floatingCaptionBackgroundOpacity = clampedOpacity
+                return
+            }
+            persistSelectedSettings()
+        }
     }
     var paragraphBreakSilenceInterval = 5.0 {
         didSet { persistSelectedSettings() }
@@ -190,6 +237,20 @@ final class TranslationSessionStore {
     var statusMessage = AppText.ready
     var toastMessage: String?
     var toastSequence = 0
+    var isOpenAIAPIConnectionTestRunning = false
+    var openAIAPIConnectionTestMessage: String?
+    var hasDeepgramAPIKey = DeepgramAPIKeyStore.hasAPIKey()
+    var isDeepgramAPIConnectionTestRunning = false
+    var deepgramAPIConnectionTestMessage: String?
+    var hasGoogleTranslateAPIKey = GoogleTranslateAPIKeyStore.hasAPIKey()
+    var isGoogleTranslateAPIConnectionTestRunning = false
+    var googleTranslateAPIConnectionTestMessage: String?
+    var hasDeepLFreeAPIKey = DeepLFreeAPIKeyStore.hasAPIKey()
+    var isDeepLFreeAPIConnectionTestRunning = false
+    var deepLFreeAPIConnectionTestMessage: String?
+    var hasDeepLProAPIKey = DeepLProAPIKeyStore.hasAPIKey()
+    var isDeepLProAPIConnectionTestRunning = false
+    var deepLProAPIConnectionTestMessage: String?
     var lines: [CaptionLine] = []
     var savedTranscripts: [SavedTranscript] = []
     var selectedSavedTranscriptID: String?
@@ -207,7 +268,9 @@ final class TranslationSessionStore {
     private let systemAudioCapture = SystemAudioCapture()
     private var microphoneAudioCapture = MicrophoneAudioCapture()
     @ObservationIgnored nonisolated(unsafe) private var transcriber = LiveSpeechTranscriber()
+    @ObservationIgnored nonisolated(unsafe) private var speechCaptioner = SpeechCaptioner()
     @ObservationIgnored nonisolated(unsafe) private var openAITranscriber = OpenAIRealtimeTranscriber()
+    @ObservationIgnored nonisolated(unsafe) private var deepgramTranscriber = DeepgramRealtimeTranscriber()
     private let translator = AppleTranslationService()
     private let openAITranslator = OpenAITranslationService()
     private let foundationTranscriptPolisher = FoundationTranscriptPolisher()
@@ -272,11 +335,11 @@ final class TranslationSessionStore {
     }
 
     var isUsingOpenAIRealtime: Bool {
-        openAITranscriptionModel.isEnabled || openAITranslationModel.isEnabled
+        openAITranscriptionModel.isEnabled || isUsingOpenAIRealtimeTranslation
     }
 
     var isUsingOpenAIRealtimeTranslation: Bool {
-        openAITranslationModel.usesRealtimeAudioTranslation
+        openAITranslationModel.usesRealtimeAudioTranslation && targetLanguage == .english
     }
 
     private struct SavedTranscriptFile {
@@ -365,7 +428,7 @@ final class TranslationSessionStore {
                 }
                 statusMessage = AppText.startingCapture(for: audioInputSource)
                 let usesOpenAIRealtimeAudio = openAITranscriptionModel.isEnabled
-                    || openAITranslationModel.usesRealtimeAudioTranslation
+                    || isUsingOpenAIRealtimeTranslation
                 let sampleRate = usesOpenAIRealtimeAudio ? 24_000 : 16_000
                 switch audioInputSource {
                 case .systemAudio:
@@ -514,9 +577,223 @@ final class TranslationSessionStore {
             try OpenAIAPIKeyStore.saveAPIKey(key)
             hasOpenAIAPIKey = true
             statusMessage = AppText.openAIAPIKeySaved
+            openAIAPIConnectionTestMessage = nil
             refreshModelAvailability()
         } catch {
             statusMessage = error.localizedDescription
+        }
+    }
+
+    func testOpenAIAPIConnection() {
+        guard hasOpenAIAPIKey, !isOpenAIAPIConnectionTestRunning else { return }
+
+        isOpenAIAPIConnectionTestRunning = true
+        openAIAPIConnectionTestMessage = AppText.openAIAPIConnectionTesting
+
+        let model = openAITranslationModel
+        let configuration = customLLMConfiguration
+        Task { @MainActor in
+            do {
+                try await openAITranslator.testConnection(
+                    translationModel: model,
+                    configuration: configuration
+                )
+                openAIAPIConnectionTestMessage = AppText.openAIAPIConnectionSucceeded
+                statusMessage = AppText.openAIAPIConnectionSucceeded
+            } catch {
+                let message = AppText.openAIAPIConnectionFailed(error.localizedDescription)
+                openAIAPIConnectionTestMessage = message
+                statusMessage = message
+            }
+
+            isOpenAIAPIConnectionTestRunning = false
+        }
+    }
+
+    func saveDeepgramAPIKey(_ key: String) {
+        do {
+            try DeepgramAPIKeyStore.saveAPIKey(key)
+            hasDeepgramAPIKey = true
+            deepgramAPIConnectionTestMessage = nil
+            statusMessage = AppText.deepgramAPIKeySaved
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func removeDeepgramAPIKey() {
+        do {
+            try DeepgramAPIKeyStore.deleteAPIKey()
+            hasDeepgramAPIKey = false
+            deepgramAPIConnectionTestMessage = nil
+            statusMessage = AppText.deepgramAPIKeyRemoved
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func testDeepgramAPIConnection() {
+        guard hasDeepgramAPIKey, !isDeepgramAPIConnectionTestRunning else { return }
+
+        isDeepgramAPIConnectionTestRunning = true
+        deepgramAPIConnectionTestMessage = AppText.deepgramAPIConnectionTesting
+
+        Task { @MainActor in
+            do {
+                try await DeepgramAPIKeyTester.testConnection()
+                deepgramAPIConnectionTestMessage = AppText.deepgramAPIConnectionSucceeded
+                statusMessage = AppText.deepgramAPIConnectionSucceeded
+            } catch {
+                let message = AppText.deepgramAPIConnectionFailed(error.localizedDescription)
+                deepgramAPIConnectionTestMessage = message
+                statusMessage = message
+            }
+
+            isDeepgramAPIConnectionTestRunning = false
+        }
+    }
+
+    func saveGoogleTranslateAPIKey(_ key: String) {
+        do {
+            try GoogleTranslateAPIKeyStore.saveAPIKey(key)
+            hasGoogleTranslateAPIKey = true
+            googleTranslateAPIConnectionTestMessage = nil
+            statusMessage = AppText.providerAPIKeySaved("Google")
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func removeGoogleTranslateAPIKey() {
+        do {
+            try GoogleTranslateAPIKeyStore.deleteAPIKey()
+            hasGoogleTranslateAPIKey = false
+            googleTranslateAPIConnectionTestMessage = nil
+            statusMessage = AppText.providerAPIKeyRemoved("Google")
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func testGoogleTranslateAPIConnection() {
+        testTranslationProviderConnection(
+            provider: "Google",
+            model: .googleTranslate,
+            hasKey: hasGoogleTranslateAPIKey,
+            isRunning: \.isGoogleTranslateAPIConnectionTestRunning,
+            message: \.googleTranslateAPIConnectionTestMessage
+        )
+    }
+
+    func saveDeepLFreeAPIKey(_ key: String) {
+        do {
+            try DeepLFreeAPIKeyStore.saveAPIKey(key)
+            hasDeepLFreeAPIKey = true
+            deepLFreeAPIConnectionTestMessage = nil
+            statusMessage = AppText.providerAPIKeySaved("DeepL Free")
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func removeDeepLFreeAPIKey() {
+        do {
+            try DeepLFreeAPIKeyStore.deleteAPIKey()
+            hasDeepLFreeAPIKey = false
+            deepLFreeAPIConnectionTestMessage = nil
+            statusMessage = AppText.providerAPIKeyRemoved("DeepL Free")
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func testDeepLFreeAPIConnection() {
+        testTranslationProviderConnection(
+            provider: "DeepL Free",
+            model: .deepLFree,
+            hasKey: hasDeepLFreeAPIKey,
+            isRunning: \.isDeepLFreeAPIConnectionTestRunning,
+            message: \.deepLFreeAPIConnectionTestMessage
+        )
+    }
+
+    func saveDeepLProAPIKey(_ key: String) {
+        do {
+            try DeepLProAPIKeyStore.saveAPIKey(key)
+            hasDeepLProAPIKey = true
+            deepLProAPIConnectionTestMessage = nil
+            statusMessage = AppText.providerAPIKeySaved("DeepL Pro")
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func removeDeepLProAPIKey() {
+        do {
+            try DeepLProAPIKeyStore.deleteAPIKey()
+            hasDeepLProAPIKey = false
+            deepLProAPIConnectionTestMessage = nil
+            statusMessage = AppText.providerAPIKeyRemoved("DeepL Pro")
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func testDeepLProAPIConnection() {
+        testTranslationProviderConnection(
+            provider: "DeepL Pro",
+            model: .deepLPro,
+            hasKey: hasDeepLProAPIKey,
+            isRunning: \.isDeepLProAPIConnectionTestRunning,
+            message: \.deepLProAPIConnectionTestMessage
+        )
+    }
+
+    private func testTranslationProviderConnection(
+        provider: String,
+        model: OpenAIRealtimeTranslationModel,
+        hasKey: Bool,
+        isRunning: ReferenceWritableKeyPath<TranslationSessionStore, Bool>,
+        message: ReferenceWritableKeyPath<TranslationSessionStore, String?>
+    ) {
+        guard hasKey, !self[keyPath: isRunning] else { return }
+
+        self[keyPath: isRunning] = true
+        self[keyPath: message] = AppText.providerAPIConnectionTesting(provider)
+
+        let configuration = customLLMConfiguration
+        Task { @MainActor in
+            do {
+                try await openAITranslator.testConnection(
+                    translationModel: model,
+                    configuration: configuration
+                )
+                let success = AppText.providerAPIConnectionSucceeded(provider)
+                self[keyPath: message] = success
+                statusMessage = success
+            } catch {
+                let failure = AppText.providerAPIConnectionFailed(provider, message: error.localizedDescription)
+                self[keyPath: message] = failure
+                statusMessage = failure
+            }
+
+            self[keyPath: isRunning] = false
+        }
+    }
+
+    func useOpenRouterLLMPreset() {
+        customLLMBaseURL = CustomLLMAPIConfiguration.openRouterBaseURL
+        if customLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || customLLMModel == "gpt-4o-mini" {
+            customLLMModel = "openai/gpt-4o-mini"
+        }
+    }
+
+    func useAiHubMixLLMPreset() {
+        customLLMBaseURL = CustomLLMAPIConfiguration.aiHubMixBaseURL
+        if customLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || customLLMModel == "openai/gpt-4o-mini" {
+            customLLMModel = "gpt-4o-mini"
         }
     }
 
@@ -577,16 +854,15 @@ final class TranslationSessionStore {
         openAITranslationModel = .off
     }
 
-    func useGPTRealtimeMode() {
+    func useAIMode() {
         selectedModel = .appleSystem
         isTranscriptLintEnabled = false
         if !openAITranscriptionModel.isEnabled {
-            openAITranscriptionModel = .gptRealtimeWhisper
+            openAITranscriptionModel = Self.aiModeDefaultTranscriptionModel
         }
         if !openAITranslationModel.isEnabled {
-            openAITranslationModel = .gptRealtimeTranslate
+            openAITranslationModel = Self.aiModeDefaultTranslationModel
         }
-        usePreferredLanguageForOpenAIOutput()
     }
 
     func modelAvailability(for model: IntelligenceModel) -> ModelAvailability {
@@ -794,19 +1070,39 @@ final class TranslationSessionStore {
         stopCaptioners()
         transcriber = LiveSpeechTranscriber()
         transcriber.delegate = self
+        speechCaptioner = SpeechCaptioner()
+        speechCaptioner.delegate = self
         openAITranscriber = OpenAIRealtimeTranscriber()
         openAITranscriber.delegate = self
+        deepgramTranscriber = DeepgramRealtimeTranscriber()
+        deepgramTranscriber.delegate = self
 
-        if openAITranslationModel.usesRealtimeAudioTranslation {
+        if isUsingOpenAIRealtimeTranslation {
             try await openAITranscriber.startRealtimeTranslationOnly(
                 language: targetLanguage,
                 model: openAITranslationModel
             )
+        } else if openAITranscriptionModel == .deepgramStreaming {
+            try await deepgramTranscriber.start(language: sourceLanguage)
         } else if openAITranscriptionModel.isEnabled {
             try await openAITranscriber.start(language: sourceLanguage, model: openAITranscriptionModel)
         } else {
-            try await transcriber.start(languages: await appleSpeechLanguagesForCurrentMode())
+            if shouldUseLegacySpeechRecognizer {
+                statusMessage = AppText.legacySpeechRecognizerFallback(source: sourceLanguage.localizedTitle)
+                try await speechCaptioner.start(locale: sourceLanguage.locale)
+                return
+            }
+            do {
+                try await transcriber.start(languages: await appleSpeechLanguagesForCurrentMode())
+            } catch SpeechError.recognizerUnavailable where !isUsingAppleSourceAutoDetection {
+                statusMessage = AppText.legacySpeechRecognizerFallback(source: sourceLanguage.localizedTitle)
+                try await speechCaptioner.start(locale: sourceLanguage.locale)
+            }
         }
+    }
+
+    private var shouldUseLegacySpeechRecognizer: Bool {
+        !isUsingAppleSourceAutoDetection && sourceLanguage != .english
     }
 
     private func appleSpeechLanguagesForCurrentMode() async -> [LanguageOption] {
@@ -830,14 +1126,20 @@ final class TranslationSessionStore {
 
     private func stopCaptioners() {
         transcriber.delegate = nil
+        speechCaptioner.delegate = nil
         openAITranscriber.delegate = nil
+        deepgramTranscriber.delegate = nil
         transcriber.stop()
+        speechCaptioner.stop()
         openAITranscriber.stop()
+        deepgramTranscriber.stop()
     }
 
     private func setCaptionersPaused(_ isPaused: Bool) {
         transcriber.setPaused(isPaused)
+        speechCaptioner.setPaused(isPaused)
         openAITranscriber.setPaused(isPaused)
+        deepgramTranscriber.setPaused(isPaused)
     }
 
     private func resetLiveSessionState(clearsVisibleLines: Bool) {
@@ -957,10 +1259,22 @@ final class TranslationSessionStore {
         if let modelID = defaults.string(forKey: SettingsKey.openAITranscriptionModelID),
            let model = OpenAIRealtimeTranscriptionModel(rawValue: modelID) {
             openAITranscriptionModel = model
+        } else if let modelID = defaults.string(forKey: SettingsKey.openAITranscriptionModelID),
+                  modelID.hasPrefix("gpt") {
+            openAITranscriptionModel = .deepgramStreaming
         }
         if let modelID = defaults.string(forKey: SettingsKey.openAITranslationModelID),
            let model = OpenAIRealtimeTranslationModel(rawValue: modelID) {
             openAITranslationModel = model
+        } else if let modelID = defaults.string(forKey: SettingsKey.openAITranslationModelID),
+                  modelID.hasPrefix("gpt-realtime-") {
+            openAITranslationModel = .customLLMAPI
+        }
+        if let baseURL = defaults.string(forKey: SettingsKey.customLLMBaseURL), !baseURL.isEmpty {
+            customLLMBaseURL = baseURL
+        }
+        if let model = defaults.string(forKey: SettingsKey.customLLMModel), !model.isEmpty {
+            customLLMModel = model
         }
         if defaults.object(forKey: SettingsKey.isDubbingEnabled) != nil {
             isDubbingEnabled = defaults.bool(forKey: SettingsKey.isDubbingEnabled)
@@ -972,6 +1286,10 @@ final class TranslationSessionStore {
            let mode = FloatingCaptionDisplayMode(rawValue: modeID) {
             floatingCaptionDisplayMode = mode
         }
+        if let placementID = defaults.string(forKey: SettingsKey.floatingCaptionPlacement),
+           let placement = FloatingCaptionPlacement(rawValue: placementID) {
+            floatingCaptionPlacement = placement
+        }
         if let sizeID = defaults.string(forKey: SettingsKey.floatingCaptionTextSize),
            let size = FloatingCaptionTextSize(rawValue: sizeID) {
             floatingCaptionTextSize = size
@@ -980,6 +1298,22 @@ final class TranslationSessionStore {
            let rawValue = Int(lineCountID),
            let lineCount = FloatingCaptionLineCount(rawValue: rawValue) {
             floatingCaptionLineCount = lineCount
+        }
+        if let fontStyleID = defaults.string(forKey: SettingsKey.floatingCaptionFontStyle),
+           let fontStyle = FloatingCaptionFontStyle(rawValue: fontStyleID) {
+            floatingCaptionFontStyle = fontStyle
+        }
+        if let textColorHex = defaults.string(forKey: SettingsKey.floatingCaptionTextColorHex), !textColorHex.isEmpty {
+            floatingCaptionTextColorHex = textColorHex
+        }
+        if let backgroundColorHex = defaults.string(forKey: SettingsKey.floatingCaptionBackgroundColorHex), !backgroundColorHex.isEmpty {
+            floatingCaptionBackgroundColorHex = backgroundColorHex
+        }
+        if defaults.object(forKey: SettingsKey.floatingCaptionBackgroundOpacity) != nil {
+            floatingCaptionBackgroundOpacity = min(
+                max(defaults.double(forKey: SettingsKey.floatingCaptionBackgroundOpacity), 0),
+                1
+            )
         }
         if defaults.object(forKey: SettingsKey.paragraphBreakSilenceInterval) != nil {
             paragraphBreakSilenceInterval = min(
@@ -1016,11 +1350,18 @@ final class TranslationSessionStore {
         defaults.set(selectedModel.id, forKey: SettingsKey.selectedModelID)
         defaults.set(openAITranscriptionModel.id, forKey: SettingsKey.openAITranscriptionModelID)
         defaults.set(openAITranslationModel.id, forKey: SettingsKey.openAITranslationModelID)
+        defaults.set(customLLMBaseURL, forKey: SettingsKey.customLLMBaseURL)
+        defaults.set(customLLMModel, forKey: SettingsKey.customLLMModel)
         defaults.set(isDubbingEnabled, forKey: SettingsKey.isDubbingEnabled)
         defaults.set(isTranscriptLintEnabled, forKey: SettingsKey.isTranscriptLintEnabled)
         defaults.set(floatingCaptionDisplayMode.id, forKey: SettingsKey.floatingCaptionDisplayMode)
+        defaults.set(floatingCaptionPlacement.id, forKey: SettingsKey.floatingCaptionPlacement)
         defaults.set(floatingCaptionTextSize.id, forKey: SettingsKey.floatingCaptionTextSize)
         defaults.set(floatingCaptionLineCount.id, forKey: SettingsKey.floatingCaptionLineCount)
+        defaults.set(floatingCaptionFontStyle.id, forKey: SettingsKey.floatingCaptionFontStyle)
+        defaults.set(floatingCaptionTextColorHex, forKey: SettingsKey.floatingCaptionTextColorHex)
+        defaults.set(floatingCaptionBackgroundColorHex, forKey: SettingsKey.floatingCaptionBackgroundColorHex)
+        defaults.set(floatingCaptionBackgroundOpacity, forKey: SettingsKey.floatingCaptionBackgroundOpacity)
         defaults.set(paragraphBreakSilenceInterval, forKey: SettingsKey.paragraphBreakSilenceInterval)
         defaults.set(savedTranscriptContentMode.id, forKey: SettingsKey.savedTranscriptContentMode)
         defaults.set(sessionDurationMode.id, forKey: SettingsKey.sessionDurationMode)
@@ -1243,7 +1584,7 @@ final class TranslationSessionStore {
             in: .userDomainMask
         )[0]
         return supportDirectory
-            .appendingPathComponent("AirTranslate", isDirectory: true)
+            .appendingPathComponent(AppText.appName, isDirectory: true)
             .appendingPathComponent("Transcripts", isDirectory: true)
     }
 
@@ -2321,14 +2662,35 @@ final class TranslationSessionStore {
                 }
 
                 let translatedSegment: String
-                if openAITranslationModel.isEnabled && !openAITranslationModel.usesRealtimeAudioTranslation {
-                    translatedSegment = try await openAITranslator.translate(
+                switch openAITranslationModel {
+                case .customLLMAPI:
+                    translatedSegment = try await openAITranslator.translateWithChatCompletions(
                         segment,
                         source: source,
                         target: target,
-                        model: openAITranslationModel
+                        configuration: customLLMConfiguration
                     )
-                } else {
+                case .googleTranslate:
+                    translatedSegment = try await openAITranslator.translateWithGoogle(
+                        segment,
+                        source: source,
+                        target: target
+                    )
+                case .deepLFree:
+                    translatedSegment = try await openAITranslator.translateWithDeepL(
+                        segment,
+                        source: source,
+                        target: target,
+                        plan: .free
+                    )
+                case .deepLPro:
+                    translatedSegment = try await openAITranslator.translateWithDeepL(
+                        segment,
+                        source: source,
+                        target: target,
+                        plan: .pro
+                    )
+                case .off:
                     translatedSegment = try await translator.translate(
                         segment,
                         source: source,
@@ -2431,7 +2793,7 @@ final class TranslationSessionStore {
     }
 
     private func requestTranslation(for line: CaptionLine, source: LanguageOption, target: LanguageOption) {
-        guard !openAITranslationModel.usesRealtimeAudioTranslation else { return }
+        guard !isUsingOpenAIRealtimeTranslation else { return }
 
         guard selectedModel != .appleSpeechOnly else {
             markTranslationUnavailable(
@@ -2682,7 +3044,7 @@ final class TranslationSessionStore {
 
     private func speakTranslatedDeltaIfNeeded(_ translatedText: String) {
         guard isRunning, isDubbingEnabled else { return }
-        guard !openAITranslationModel.usesRealtimeAudioTranslation else { return }
+        guard !isUsingOpenAIRealtimeTranslation else { return }
 
         let currentText = speechReadyText(translatedText)
         guard !currentText.isEmpty else { return }
@@ -2849,7 +3211,9 @@ final class TranslationSessionStore {
 extension TranslationSessionStore: SystemAudioCaptureDelegate {
     nonisolated func systemAudioCapture(_ capture: SystemAudioCapture, didOutput sampleBuffer: CMSampleBuffer) {
         transcriber.append(sampleBuffer)
+        speechCaptioner.append(sampleBuffer)
         openAITranscriber.append(sampleBuffer)
+        deepgramTranscriber.append(sampleBuffer)
     }
 
     nonisolated func systemAudioCapture(_ capture: SystemAudioCapture, didReceiveAudioSampleCount count: Int, level: Float?) {
@@ -2894,7 +3258,9 @@ extension TranslationSessionStore: SystemAudioCaptureDelegate {
 extension TranslationSessionStore: MicrophoneAudioCaptureDelegate {
     nonisolated func microphoneAudioCapture(_ capture: MicrophoneAudioCapture, didOutput sampleBuffer: CMSampleBuffer) {
         transcriber.append(sampleBuffer)
+        speechCaptioner.append(sampleBuffer)
         openAITranscriber.append(sampleBuffer)
+        deepgramTranscriber.append(sampleBuffer)
     }
 
     nonisolated func microphoneAudioCapture(
@@ -2953,10 +3319,10 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
         sampleRate: Double
     ) {
         Task { @MainActor in
-            guard isRunning,
+                  guard isRunning,
                   !isPaused,
                   isDubbingEnabled,
-                  openAITranslationModel.usesRealtimeAudioTranslation
+                  isUsingOpenAIRealtimeTranslation
             else {
                 return
             }
@@ -2966,6 +3332,25 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
     }
 
     nonisolated func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didFail error: Error) {
+        Task { @MainActor in
+            statusMessage = error.localizedDescription
+        }
+    }
+}
+
+extension TranslationSessionStore: SpeechCaptionerDelegate {
+    nonisolated func speechCaptioner(_ captioner: SpeechCaptioner, didRecognize text: String, isFinal: Bool) {
+        Task { @MainActor in
+            await appendCaption(
+                sourceText: text,
+                recognizedLanguage: sourceLanguage,
+                confidence: 1.0,
+                isFinal: isFinal
+            )
+        }
+    }
+
+    nonisolated func speechCaptioner(_ captioner: SpeechCaptioner, didFail error: Error) {
         Task { @MainActor in
             statusMessage = error.localizedDescription
         }

@@ -35,11 +35,7 @@ cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_RESOURCES/AppIcon.icns"
 select_code_sign_identity() {
   if [[ -n "$CODE_SIGN_IDENTITY" ]]; then
     printf '%s\n' "$CODE_SIGN_IDENTITY"
-    return
   fi
-
-  /usr/bin/security find-identity -v -p codesigning 2>/dev/null |
-    /usr/bin/awk -F'"' '/"Apple Development:|Developer ID Application:|Mac Developer:/{ print $2; exit }'
 }
 
 SIGN_IDENTITY="$(select_code_sign_identity)"

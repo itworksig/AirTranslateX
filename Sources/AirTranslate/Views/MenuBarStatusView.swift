@@ -17,6 +17,10 @@ struct MenuBarStatusView: View {
 
             Divider()
 
+            placementGrid
+
+            Divider()
+
             captionFormatControls
         }
         .padding(16)
@@ -197,6 +201,88 @@ struct MenuBarStatusView: View {
                 .buttonStyle(.plain)
                 .help(AppText.floatingLineCount)
             }
+
+            Menu {
+                ForEach(FloatingCaptionFontStyle.allCases) { style in
+                    Button(style.title) {
+                        session.floatingCaptionFontStyle = style
+                    }
+                }
+            } label: {
+                IconMenuLabel(
+                    systemImage: "textformat",
+                    title: AppText.floatingFontStyle,
+                    value: session.floatingCaptionFontStyle.title
+                )
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    ColorPicker(AppText.floatingTextColor, selection: textColorBinding)
+                        .labelsHidden()
+                        .help(AppText.floatingTextColor)
+
+                    Text(AppText.floatingTextColor)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 0)
+
+                    ColorPicker(AppText.floatingBackgroundColor, selection: backgroundColorBinding)
+                        .labelsHidden()
+                        .help(AppText.floatingBackgroundColor)
+
+                    Text(AppText.floatingBackgroundColor)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 10) {
+                    Text(AppText.floatingBackgroundOpacity)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Slider(value: $session.floatingCaptionBackgroundOpacity, in: 0...1)
+
+                    Text("\(Int((session.floatingCaptionBackgroundOpacity * 100).rounded()))%")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 38, alignment: .trailing)
+                }
+            }
+            .padding(10)
+            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            }
+        }
+    }
+
+    private var placementGrid: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ControlSectionHeader(
+                systemImage: "rectangle.on.rectangle",
+                title: AppText.floatingPlacement
+            )
+
+            HStack(spacing: 8) {
+                ForEach(FloatingCaptionPlacement.allCases) { placement in
+                    Button {
+                        session.floatingCaptionPlacement = placement
+                    } label: {
+                        IconChoiceLabel(
+                            systemImage: placement.systemImage,
+                            title: placement.title,
+                            isSelected: session.floatingCaptionPlacement == placement
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(placement.title)
+                }
+            }
         }
     }
 
@@ -246,6 +332,31 @@ struct MenuBarStatusView: View {
         case .translation:
             AppText.translationOnly
         }
+    }
+
+    private var textColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                ColorHex.color(
+                    from: session.floatingCaptionTextColorHex,
+                    fallback: Color(red: 0.97, green: 0.96, blue: 0.92)
+                )
+            },
+            set: { color in
+                session.floatingCaptionTextColorHex = ColorHex.hex(from: color, fallback: "#F8F5EA")
+            }
+        )
+    }
+
+    private var backgroundColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                ColorHex.color(from: session.floatingCaptionBackgroundColorHex, fallback: .black)
+            },
+            set: { color in
+                session.floatingCaptionBackgroundColorHex = ColorHex.hex(from: color, fallback: "#050505")
+            }
+        )
     }
 }
 

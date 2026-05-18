@@ -73,6 +73,12 @@ struct SettingsView: View {
                     }
                 }
 
+                Picker(AppText.floatingPlacement, selection: $session.floatingCaptionPlacement) {
+                    ForEach(FloatingCaptionPlacement.allCases) { placement in
+                        Text(placement.title).tag(placement)
+                    }
+                }
+
                 Picker(AppText.floatingTextSize, selection: $session.floatingCaptionTextSize) {
                     ForEach(FloatingCaptionTextSize.allCases) { size in
                         Text(size.title).tag(size)
@@ -83,6 +89,27 @@ struct SettingsView: View {
                     ForEach(FloatingCaptionLineCount.allCases) { lineCount in
                         Text(lineCount.title).tag(lineCount)
                     }
+                }
+
+                Picker(AppText.floatingFontStyle, selection: $session.floatingCaptionFontStyle) {
+                    ForEach(FloatingCaptionFontStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+
+                ColorPicker(AppText.floatingTextColor, selection: textColorBinding)
+
+                ColorPicker(AppText.floatingBackgroundColor, selection: backgroundColorBinding)
+
+                Slider(
+                    value: $session.floatingCaptionBackgroundOpacity,
+                    in: 0...1
+                ) {
+                    Text(AppText.floatingBackgroundOpacity)
+                } minimumValueLabel: {
+                    Text("0%")
+                } maximumValueLabel: {
+                    Text("100%")
                 }
 
                 Text(AppText.floatingDisplayDescription)
@@ -114,6 +141,31 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 420)
         .padding()
+    }
+
+    private var textColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                ColorHex.color(
+                    from: session.floatingCaptionTextColorHex,
+                    fallback: Color(red: 0.97, green: 0.96, blue: 0.92)
+                )
+            },
+            set: { color in
+                session.floatingCaptionTextColorHex = ColorHex.hex(from: color, fallback: "#F8F5EA")
+            }
+        )
+    }
+
+    private var backgroundColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                ColorHex.color(from: session.floatingCaptionBackgroundColorHex, fallback: .black)
+            },
+            set: { color in
+                session.floatingCaptionBackgroundColorHex = ColorHex.hex(from: color, fallback: "#050505")
+            }
+        )
     }
 }
 

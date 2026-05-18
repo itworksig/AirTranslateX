@@ -11,6 +11,10 @@ struct LanguageOption: Identifiable, Hashable, Sendable {
 
     static let english = LanguageOption(id: "en-US", title: "English", locale: Locale(identifier: "en-US"))
     static let korean = LanguageOption(id: "ko-KR", title: "Korean", locale: Locale(identifier: "ko-KR"))
+    static let russian = LanguageOption(id: "ru-RU", title: "Russian", locale: Locale(identifier: "ru-RU"))
+    static let arabic = LanguageOption(id: "ar-SA", title: "Arabic", locale: Locale(identifier: "ar-SA"))
+    static let persian = LanguageOption(id: "fa-IR", title: "Persian", locale: Locale(identifier: "fa-IR"))
+    static let indonesian = LanguageOption(id: "id-ID", title: "Indonesian", locale: Locale(identifier: "id-ID"))
 
     static let supported: [LanguageOption] = [
         english,
@@ -19,7 +23,11 @@ struct LanguageOption: Identifiable, Hashable, Sendable {
         .init(id: "zh-CN", title: "Chinese Simplified", locale: Locale(identifier: "zh-CN")),
         .init(id: "es-ES", title: "Spanish", locale: Locale(identifier: "es-ES")),
         .init(id: "fr-FR", title: "French", locale: Locale(identifier: "fr-FR")),
-        .init(id: "de-DE", title: "German", locale: Locale(identifier: "de-DE"))
+        .init(id: "de-DE", title: "German", locale: Locale(identifier: "de-DE")),
+        russian,
+        arabic,
+        persian,
+        indonesian
     ]
 
     static func prioritizedAutoDetectionCandidates(

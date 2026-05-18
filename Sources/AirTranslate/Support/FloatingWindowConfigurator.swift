@@ -3,6 +3,8 @@ import SwiftUI
 
 struct FloatingWindowConfigurator: NSViewRepresentable {
     let preferredContentHeight: CGFloat
+    let preferredContentWidth: CGFloat
+    let placement: FloatingCaptionPlacement
 
     func makeNSView(context _: Context) -> NSView {
         NSView()
@@ -13,7 +15,7 @@ struct FloatingWindowConfigurator: NSViewRepresentable {
             guard let window = view.window else { return }
 
             window.identifier = NSUserInterfaceItemIdentifier(AirTranslateWindowID.floatingCaptions)
-            window.level = .floating
+            window.level = placement == .notchIsland ? .statusBar : .floating
             window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
             window.isMovableByWindowBackground = true
             window.titleVisibility = .hidden
@@ -22,9 +24,11 @@ struct FloatingWindowConfigurator: NSViewRepresentable {
             window.isOpaque = false
             window.hasShadow = false
 
-            let minimumSize = NSSize(width: 420, height: preferredContentHeight)
+            let minimumSize = NSSize(width: placement == .notchIsland ? 280 : 420, height: preferredContentHeight)
             window.minSize = minimumSize
-            if window.contentLayoutRect.height + 1 < preferredContentHeight {
+            if placement == .notchIsland {
+                window.setContentSize(NSSize(width: preferredContentWidth, height: preferredContentHeight))
+            } else if window.contentLayoutRect.height + 1 < preferredContentHeight {
                 window.setContentSize(
                     NSSize(
                         width: max(window.contentLayoutRect.width, minimumSize.width),
@@ -32,7 +36,11 @@ struct FloatingWindowConfigurator: NSViewRepresentable {
                     )
                 )
             }
-            keepWindowVisible(window)
+            if placement == .notchIsland {
+                pinWindowToNotch(window)
+            } else {
+                keepWindowVisible(window)
+            }
         }
     }
 
@@ -57,5 +65,15 @@ struct FloatingWindowConfigurator: NSViewRepresentable {
         if !NSEqualRects(frame, window.frame) {
             window.setFrame(frame, display: true)
         }
+    }
+
+    private func pinWindowToNotch(_ window: NSWindow) {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+
+        let screenFrame = screen.frame
+        var frame = window.frame
+        frame.origin.x = screenFrame.midX - frame.width / 2
+        frame.origin.y = screenFrame.maxY - frame.height - 6
+        window.setFrame(frame, display: true)
     }
 }

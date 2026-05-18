@@ -8,7 +8,7 @@ struct AirTranslateApp: App {
     @State private var menuBarPanelController = MenuBarPanelController()
 
     var body: some Scene {
-        WindowGroup("AirTranslate", id: AirTranslateWindowID.main) {
+        WindowGroup(AppText.appName, id: AirTranslateWindowID.main) {
             ContentView(session: session)
                 .frame(minWidth: 900, minHeight: 560)
                 .background(MenuBarPanelInstaller(session: session, controller: menuBarPanelController))

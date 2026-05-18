@@ -7,6 +7,7 @@ enum AppText {
         case korean
         case japanese
         case chineseSimplified
+        case russian
     }
 
     private static var interfaceLanguage: InterfaceLanguage {
@@ -24,15 +25,19 @@ enum AppText {
         if languageCode.hasPrefix("zh") {
             return .chineseSimplified
         }
+        if languageCode.hasPrefix("ru") {
+            return .russian
+        }
         return .english
     }
 
-    static func localized(english: String, korean: String) -> String {
+    static func localized(english: String, korean: String, russian: String? = nil) -> String {
         localized(
             english: english,
             korean: korean,
             japanese: english,
-            chineseSimplified: english
+            chineseSimplified: english,
+            russian: russian
         )
     }
 
@@ -40,7 +45,8 @@ enum AppText {
         english: String,
         korean: String,
         japanese: String,
-        chineseSimplified: String
+        chineseSimplified: String,
+        russian: String? = nil
     ) -> String {
         switch interfaceLanguage {
         case .english:
@@ -51,10 +57,12 @@ enum AppText {
             japanese
         case .chineseSimplified:
             chineseSimplified
+        case .russian:
+            russian ?? english
         }
     }
 
-    static let appName = "AirTranslate"
+    static let appName = "AirTranslateX"
     static let appTagline = localized(
         english: "Live transcript translator",
         korean: "실시간 기록 번역",
@@ -170,8 +178,21 @@ enum AppText {
         japanese: "APIキーを貼り付け",
         chineseSimplified: "粘贴 API key"
     )
+    static let googleTranslateAPIKeyPlaceholder = localized(
+        english: "Paste Google API key",
+        korean: "Google API 키 붙여넣기",
+        japanese: "Google APIキーを貼り付け",
+        chineseSimplified: "粘贴 Google API key"
+    )
+    static let deepLAPIKeyPlaceholder = localized(
+        english: "Paste DeepL API key",
+        korean: "DeepL API 키 붙여넣기",
+        japanese: "DeepL APIキーを貼り付け",
+        chineseSimplified: "粘贴 DeepL API key"
+    )
     static let saveOpenAIAPIKey = localized(english: "Save API Key", korean: "API 키 저장", japanese: "APIキーを保存", chineseSimplified: "保存 API key")
     static let removeOpenAIAPIKey = localized(english: "Remove API Key", korean: "API 키 삭제", japanese: "APIキーを削除", chineseSimplified: "删除 API key")
+    static let testOpenAIAPIKey = localized(english: "Test API Key", korean: "API 키 테스트", japanese: "APIキーをテスト", chineseSimplified: "测试 API key")
     static let openAIAPIKeySaved = localized(
         english: "OpenAI API key saved in Keychain.",
         korean: "OpenAI API 키가 Keychain에 저장되었습니다."
@@ -196,11 +217,23 @@ enum AppText {
         english: "Add an OpenAI API key in Settings before using OpenAI Translation.",
         korean: "OpenAI 번역을 사용하려면 설정에서 OpenAI API 키를 먼저 입력하세요."
     )
-    static let openAIAPIKeyRequiredForGPTMode = localized(
-        english: "Enter an OpenAI API key to use GPT mode.",
-        korean: "GPT 모드를 사용하려면 OpenAI API 키를 입력하세요.",
-        japanese: "GPTモードを使うにはOpenAI APIキーを入力してください。",
-        chineseSimplified: "要使用 GPT 模式，请输入 OpenAI API key。"
+    static let googleTranslateAPIKeyMissing = localized(
+        english: "Add a Google Cloud Translation API key in Settings.",
+        korean: "설정에서 Google Cloud Translation API 키를 입력하세요.",
+        japanese: "設定でGoogle Cloud Translation APIキーを入力してください。",
+        chineseSimplified: "请先在设置里添加 Google Cloud Translation API key。"
+    )
+    static let deepLAPIKeyMissing = localized(
+        english: "Add a DeepL API key in Settings.",
+        korean: "설정에서 DeepL API 키를 입력하세요.",
+        japanese: "設定でDeepL APIキーを入力してください。",
+        chineseSimplified: "请先在设置里添加 DeepL API key。"
+    )
+    static let openAIAPIKeyRequiredForAIMode = localized(
+        english: "Enter an API key to use AI Mode.",
+        korean: "AI 모드를 사용하려면 API 키를 입력하세요.",
+        japanese: "AIモードを使うにはAPIキーを入力してください。",
+        chineseSimplified: "要使用 AI 模式，请输入 API key。"
     )
     static let openAIAPIKeyEmpty = localized(
         english: "Enter an OpenAI API key before saving.",
@@ -210,39 +243,126 @@ enum AppText {
         english: "The stored OpenAI API key could not be read.",
         korean: "저장된 OpenAI API 키를 읽을 수 없습니다."
     )
+    static let openAIAPIKeyMaskedPlaceholder = localized(
+        english: "Enter the real API key, not the masked placeholder.",
+        korean: "마스킹 표시가 아닌 실제 API 키를 입력하세요."
+    )
+    static let deepgramAPIKeyPlaceholder = localized(
+        english: "Paste Deepgram API key",
+        korean: "Deepgram API 키 붙여넣기",
+        japanese: "Deepgram APIキーを貼り付け",
+        chineseSimplified: "粘贴 Deepgram API key"
+    )
+    static let saveDeepgramAPIKey = localized(english: "Save Deepgram API Key", korean: "Deepgram API 키 저장", japanese: "Deepgram APIキーを保存", chineseSimplified: "保存 Deepgram API key")
+    static let removeDeepgramAPIKey = localized(english: "Remove Deepgram API Key", korean: "Deepgram API 키 삭제", japanese: "Deepgram APIキーを削除", chineseSimplified: "删除 Deepgram API key")
+    static let testDeepgramAPIKey = localized(english: "Test Deepgram API Key", korean: "Deepgram API 키 테스트", japanese: "Deepgram APIキーをテスト", chineseSimplified: "测试 Deepgram API key")
+    static let deepgramAPIKeySaved = localized(
+        english: "Deepgram API key saved in Keychain.",
+        korean: "Deepgram API 키가 Keychain에 저장되었습니다."
+    )
+    static let deepgramAPIKeyRemoved = localized(
+        english: "Deepgram API key removed.",
+        korean: "Deepgram API 키가 삭제되었습니다."
+    )
+    static let deepgramAPIKeyConfigured = localized(
+        english: "Deepgram API key saved",
+        korean: "Deepgram API 키 저장됨",
+        japanese: "Deepgram APIキー保存済み",
+        chineseSimplified: "Deepgram API key 已保存"
+    )
+    static let deepgramAPIKeyNotConfigured = localized(
+        english: "Deepgram API key required",
+        korean: "Deepgram API 키 필요",
+        japanese: "Deepgram APIキーが必要",
+        chineseSimplified: "需要 Deepgram API key"
+    )
+    static func providerAPIKeySaved(_ provider: String) -> String {
+        localized(
+            english: "\(provider) API key saved.",
+            korean: "\(provider) API 키가 저장되었습니다.",
+            japanese: "\(provider) APIキーを保存しました。",
+            chineseSimplified: "\(provider) API key 已保存。"
+        )
+    }
+    static func providerAPIKeyRemoved(_ provider: String) -> String {
+        localized(
+            english: "\(provider) API key removed.",
+            korean: "\(provider) API 키를 삭제했습니다.",
+            japanese: "\(provider) APIキーを削除しました。",
+            chineseSimplified: "\(provider) API key 已删除。"
+        )
+    }
+    static func providerAPIKeyConfigured(_ provider: String) -> String {
+        localized(
+            english: "\(provider) API key saved",
+            korean: "\(provider) API 키 저장됨",
+            japanese: "\(provider) APIキー保存済み",
+            chineseSimplified: "\(provider) API key 已保存"
+        )
+    }
+    static func providerAPIKeyNotConfigured(_ provider: String) -> String {
+        localized(
+            english: "\(provider) API key required",
+            korean: "\(provider) API 키 필요",
+            japanese: "\(provider) APIキーが必要",
+            chineseSimplified: "需要 \(provider) API key"
+        )
+    }
     static let appleProcessingMode = localized(english: "Apple Mode", korean: "Apple 기본 모드", japanese: "Apple標準モード", chineseSimplified: "Apple 默认模式")
     static let appleProcessingModeDescription = localized(
-        english: "The default local workflow. Keep this as the base, then add OpenAI Realtime below only when needed.",
-        korean: "기본 로컬 처리 흐름입니다. 이 설정을 기준으로 두고, 필요한 경우 아래 OpenAI Realtime만 추가하세요."
+        english: "Use Apple's local speech and translation workflow.",
+        korean: "Apple 로컬 음성 인식 및 번역 흐름을 사용합니다.",
+        japanese: "Appleのローカル音声認識と翻訳ワークフローを使用します。",
+        chineseSimplified: "使用 Apple 本地语音识别和翻译流程。"
     )
-    static let gptModels = localized(english: "OpenAI Realtime", korean: "OpenAI Realtime", japanese: "OpenAI Realtime", chineseSimplified: "OpenAI Realtime")
-    static let gptTranscriptionModel = localized(
+    static let aiModels = localized(english: "AI Providers", korean: "AI 제공업체", japanese: "AIプロバイダー", chineseSimplified: "AI 服务")
+    static let aiTranscriptionModel = localized(
         english: "Transcription",
         korean: "전사",
         japanese: "文字起こし",
         chineseSimplified: "转写"
     )
-    static let gptTranslationModel = localized(
-        english: "Auto Translation",
+    static let aiTranslationModel = localized(
+        english: "Translation",
         korean: "자동번역",
         japanese: "自動翻訳",
-        chineseSimplified: "自动翻译"
+        chineseSimplified: "翻译"
     )
-    static let gptModelsDescription = localized(
-        english: "GPT mode uses OpenAI Realtime directly for the translated stream and bypasses local transcript cleanup.",
-        korean: "GPT 모드는 OpenAI Realtime의 번역 스트림을 직접 사용하며 로컬 기록 다듬기를 건너뜁니다."
+    static let aiModelsDescription = localized(
+        english: "Choose Deepgram for live transcription, then translate with Apple, a custom LLM API, Google, or DeepL.",
+        korean: "실시간 전사는 Deepgram을 선택하고 번역은 Apple, Custom LLM API, Google, DeepL 중에서 고를 수 있습니다.",
+        japanese: "ライブ文字起こしはDeepgram、翻訳はApple、Custom LLM API、Google、DeepLから選べます。",
+        chineseSimplified: "可用 Deepgram 实时转写，并用 Apple、自定义 LLM API、Google 或 DeepL 翻译。"
     )
-    static let openAINativeOutput = localized(
-        english: "OpenAI native output",
-        korean: "OpenAI 본연의 출력",
-        japanese: "OpenAIネイティブ出力",
-        chineseSimplified: "OpenAI 原生输出"
+    static let customLLMBaseURL = localized(
+        english: "Base URL",
+        korean: "Base URL",
+        japanese: "Base URL",
+        chineseSimplified: "Base URL"
     )
-    static let openAINativeOutputDescription = localized(
-        english: "Transcript cleanup is disabled in GPT mode so the realtime API output is shown as-is.",
-        korean: "GPT 모드에서는 실시간 API 결과를 그대로 보여주도록 기록 다듬기를 사용하지 않습니다.",
-        japanese: "GPTモードではリアルタイムAPIの出力をそのまま表示するため、記録の整形は使いません。",
-        chineseSimplified: "GPT 模式会直接显示实时 API 输出，不使用记录润色。"
+    static let customLLMBaseURLPlaceholder = localized(
+        english: "https://openrouter.ai/api/v1",
+        korean: "https://openrouter.ai/api/v1",
+        japanese: "https://openrouter.ai/api/v1",
+        chineseSimplified: "https://openrouter.ai/api/v1"
+    )
+    static let customLLMModel = localized(
+        english: "Model",
+        korean: "모델",
+        japanese: "モデル",
+        chineseSimplified: "模型"
+    )
+    static let customLLMModelPlaceholder = localized(
+        english: "openai/gpt-4o-mini",
+        korean: "openai/gpt-4o-mini",
+        japanese: "openai/gpt-4o-mini",
+        chineseSimplified: "openai/gpt-4o-mini"
+    )
+    static let customLLMDescription = localized(
+        english: "Use any OpenAI-compatible /chat/completions API, including OpenRouter and AiHubMix.",
+        korean: "OpenRouter와 AiHubMix를 포함해 OpenAI 호환 /chat/completions API를 사용할 수 있습니다.",
+        japanese: "OpenRouterやAiHubMixなど、OpenAI互換の/chat/completions APIを使用できます。",
+        chineseSimplified: "可使用 OpenRouter、AiHubMix 等 OpenAI 兼容的 /chat/completions API。"
     )
     static let openAILanguageModeDescription = localized(
         english: "OpenAI detects the input language and translates it to your preferred language.",
@@ -269,16 +389,16 @@ enum AppText {
         chineseSimplified: "输入语言自动检测将在后续更新中改进。"
     )
     static let translatedVoiceOutput = localized(
-        english: "GPT translated voice",
-        korean: "GPT 번역 음성",
+        english: "AI translated voice",
+        korean: "AI 번역 음성",
         japanese: "翻訳音声",
         chineseSimplified: "译文语音"
     )
     static let translatedVoiceOutputDescription = localized(
-        english: "Play OpenAI's translated audio stream directly.",
-        korean: "OpenAI 번역 음성 스트림을 직접 재생합니다.",
-        japanese: "OpenAIの翻訳音声ストリームを直接再生します。",
-        chineseSimplified: "直接播放 OpenAI 翻译语音流。"
+        english: "Play translated speech from the selected AI workflow.",
+        korean: "선택한 AI 흐름의 번역 음성을 재생합니다.",
+        japanese: "選択したAIワークフローの翻訳音声を再生します。",
+        chineseSimplified: "播放所选 AI 流程的译文语音。"
     )
     static let openAIAPIKeyPlatformPrompt = localized(
         english: "No API key yet?",
@@ -318,12 +438,17 @@ enum AppText {
     static let hideFloatingCaptions = localized(english: "Hide Floating Captions", korean: "플로팅 자막 숨기기")
     static let openMainWindow = localized(english: "Open Main Window", korean: "메인 창 열기")
     static let floatingDisplay = localized(english: "Floating Display", korean: "플로팅 표시")
+    static let floatingPlacement = localized(english: "Position", korean: "위치", japanese: "位置", chineseSimplified: "位置")
     static let floatingDisplayDescription = localized(
         english: "Choose what appears in the detachable floating caption window.",
         korean: "따로 띄우는 플로팅 자막 창에 표시할 내용을 선택합니다."
     )
     static let floatingTextSize = localized(english: "Floating Text Size", korean: "플로팅 글자 크기")
     static let floatingLineCount = localized(english: "Floating Lines", korean: "플로팅 표시 줄 수")
+    static let floatingFontStyle = localized(english: "Font", korean: "글꼴", japanese: "フォント", chineseSimplified: "字体")
+    static let floatingTextColor = localized(english: "Text Color", korean: "글자 색", japanese: "文字色", chineseSimplified: "字体颜色")
+    static let floatingBackgroundColor = localized(english: "Background Color", korean: "배경 색", japanese: "背景色", chineseSimplified: "背景色")
+    static let floatingBackgroundOpacity = localized(english: "Background Opacity", korean: "배경 투명도", japanese: "背景の透明度", chineseSimplified: "背景透明度")
     static let originalOnly = localized(english: "Original", korean: "원문", japanese: "原文", chineseSimplified: "原文")
     static let originalAndTranslation = localized(english: "Original + Translation", korean: "원문 + 번역", japanese: "原文 + 翻訳", chineseSimplified: "原文 + 译文")
     static let translationOnly = localized(english: "Translation", korean: "번역", japanese: "翻訳", chineseSimplified: "译文")
@@ -532,6 +657,14 @@ enum AppText {
         english: "Choose different source and target languages to translate.",
         korean: "번역하려면 원문과 번역 언어를 다르게 선택하세요."
     )
+    static func legacySpeechRecognizerFallback(source: String) -> String {
+        localized(
+            english: "Using macOS Speech Recognition for \(source).",
+            korean: "\(source)에 macOS 음성 인식을 사용합니다.",
+            japanese: "\(source)にmacOS音声認識を使用します。",
+            chineseSimplified: "正在使用 macOS 语音识别处理\(source)。"
+        )
+    }
     static let untitledTranscript = localized(english: "Untitled Transcript", korean: "제목 없는 기록")
 
     static func languageSummary(source: String, target: String) -> String {
@@ -630,6 +763,66 @@ enum AppText {
         english: "OpenAI returned no translated text.",
         korean: "OpenAI가 번역 텍스트를 반환하지 않았습니다."
     )
+    static let customLLMEndpointInvalid = localized(
+        english: "Enter a valid LLM API base URL.",
+        korean: "올바른 LLM API Base URL을 입력하세요."
+    )
+    static let customLLMModelMissing = localized(
+        english: "Enter an LLM model name.",
+        korean: "LLM 모델 이름을 입력하세요."
+    )
+    static let openAIAPIConnectionTesting = localized(
+        english: "Testing API connection...",
+        korean: "API 연결을 테스트하는 중..."
+    )
+    static let openAIAPIConnectionSucceeded = localized(
+        english: "API connection works.",
+        korean: "API 연결이 정상입니다."
+    )
+    static func providerAPIConnectionTesting(_ provider: String) -> String {
+        localized(
+            english: "Testing \(provider) connection...",
+            korean: "\(provider) 연결을 테스트하는 중...",
+            japanese: "\(provider) 接続をテスト中...",
+            chineseSimplified: "正在测试 \(provider) 连接..."
+        )
+    }
+    static func providerAPIConnectionSucceeded(_ provider: String) -> String {
+        localized(
+            english: "\(provider) connection works.",
+            korean: "\(provider) 연결이 정상입니다.",
+            japanese: "\(provider) 接続正常。",
+            chineseSimplified: "\(provider) 连接正常。"
+        )
+    }
+    static func openAIAPIConnectionFailed(_ message: String) -> String {
+        localized(
+            english: "API test failed: \(message)",
+            korean: "API 테스트 실패: \(message)"
+        )
+    }
+    static func providerAPIConnectionFailed(_ provider: String, message: String) -> String {
+        localized(
+            english: "\(provider) test failed: \(message)",
+            korean: "\(provider) 테스트 실패: \(message)",
+            japanese: "\(provider) テスト失敗: \(message)",
+            chineseSimplified: "\(provider) 测试失败：\(message)"
+        )
+    }
+    static let deepgramAPIConnectionTesting = localized(
+        english: "Testing Deepgram connection...",
+        korean: "Deepgram 연결을 테스트하는 중..."
+    )
+    static let deepgramAPIConnectionSucceeded = localized(
+        english: "Deepgram connection works.",
+        korean: "Deepgram 연결이 정상입니다."
+    )
+    static func deepgramAPIConnectionFailed(_ message: String) -> String {
+        localized(
+            english: "Deepgram test failed: \(message)",
+            korean: "Deepgram 테스트 실패: \(message)"
+        )
+    }
 
     static func openAIRequestFailed(statusCode: Int, message: String?) -> String {
         let detail = message.map { ": \($0)" } ?? ""
@@ -730,19 +923,27 @@ enum AppText {
     static func languageTitle(for id: String, fallback: String) -> String {
         switch id {
         case "en-US":
-            localized(english: "English", korean: "영어", japanese: "英語", chineseSimplified: "英语")
+            localized(english: "English", korean: "영어", japanese: "英語", chineseSimplified: "英语", russian: "Английский")
         case "ko-KR":
-            localized(english: "Korean", korean: "한국어", japanese: "韓国語", chineseSimplified: "韩语")
+            localized(english: "Korean", korean: "한국어", japanese: "韓国語", chineseSimplified: "韩语", russian: "Корейский")
         case "ja-JP":
-            localized(english: "Japanese", korean: "일본어", japanese: "日本語", chineseSimplified: "日语")
+            localized(english: "Japanese", korean: "일본어", japanese: "日本語", chineseSimplified: "日语", russian: "Японский")
         case "zh-CN":
-            localized(english: "Chinese Simplified", korean: "중국어 간체", japanese: "簡体字中国語", chineseSimplified: "简体中文")
+            localized(english: "Chinese Simplified", korean: "중국어 간체", japanese: "簡体字中国語", chineseSimplified: "简体中文", russian: "Китайский упрощенный")
         case "es-ES":
-            localized(english: "Spanish", korean: "스페인어", japanese: "スペイン語", chineseSimplified: "西班牙语")
+            localized(english: "Spanish", korean: "스페인어", japanese: "スペイン語", chineseSimplified: "西班牙语", russian: "Испанский")
         case "fr-FR":
-            localized(english: "French", korean: "프랑스어", japanese: "フランス語", chineseSimplified: "法语")
+            localized(english: "French", korean: "프랑스어", japanese: "フランス語", chineseSimplified: "法语", russian: "Французский")
         case "de-DE":
-            localized(english: "German", korean: "독일어", japanese: "ドイツ語", chineseSimplified: "德语")
+            localized(english: "German", korean: "독일어", japanese: "ドイツ語", chineseSimplified: "德语", russian: "Немецкий")
+        case "ru-RU":
+            localized(english: "Russian", korean: "러시아어", japanese: "ロシア語", chineseSimplified: "俄语", russian: "Русский")
+        case "ar-SA":
+            localized(english: "Arabic", korean: "아랍어", japanese: "アラビア語", chineseSimplified: "阿拉伯语", russian: "Арабский")
+        case "fa-IR":
+            localized(english: "Persian", korean: "페르시아어", japanese: "ペルシア語", chineseSimplified: "波斯语", russian: "Персидский")
+        case "id-ID":
+            localized(english: "Indonesian", korean: "인도네시아어", japanese: "インドネシア語", chineseSimplified: "印尼语", russian: "Индонезийский")
         default:
             fallback
         }

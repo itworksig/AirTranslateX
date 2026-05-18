@@ -75,7 +75,11 @@ enum IntelligenceModel: String, CaseIterable, Identifiable {
 
 enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
     case off
-    case gptRealtimeWhisper = "gpt-realtime-whisper"
+    case deepgramStreaming = "deepgram-streaming"
+
+    static var allCases: [OpenAIRealtimeTranscriptionModel] {
+        [.off, .deepgramStreaming]
+    }
 
     var id: String { rawValue }
 
@@ -83,8 +87,8 @@ enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
         switch self {
         case .off:
             AppText.localized(english: "Use Apple Speech", korean: "Apple Speech 사용", japanese: "Apple Speechを使用", chineseSimplified: "使用 Apple Speech")
-        case .gptRealtimeWhisper:
-            "gpt-realtime-whisper"
+        case .deepgramStreaming:
+            "Deepgram Streaming"
         }
     }
 
@@ -95,8 +99,14 @@ enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
 
 enum OpenAIRealtimeTranslationModel: String, CaseIterable, Identifiable {
     case off
-    case gptRealtimeTranslate = "gpt-realtime-translate"
-    case gptRealtimeTranslateOnly = "gpt-realtime-translate-only"
+    case customLLMAPI = "custom-llm-api"
+    case googleTranslate = "google-translate"
+    case deepLFree = "deepl-free"
+    case deepLPro = "deepl-pro"
+
+    static var allCases: [OpenAIRealtimeTranslationModel] {
+        [.off, .customLLMAPI, .googleTranslate, .deepLFree, .deepLPro]
+    }
 
     var id: String { rawValue }
 
@@ -104,15 +114,19 @@ enum OpenAIRealtimeTranslationModel: String, CaseIterable, Identifiable {
         switch self {
         case .off:
             AppText.localized(english: "Use Apple Translation", korean: "Apple Translation 사용", japanese: "Apple Translationを使用", chineseSimplified: "使用 Apple Translation")
-        case .gptRealtimeTranslate:
-            "gpt-realtime-translate"
-        case .gptRealtimeTranslateOnly:
+        case .customLLMAPI:
             AppText.localized(
-                english: "gpt-realtime-translate · translation only",
-                korean: "gpt-realtime-translate · 실시간 번역만",
-                japanese: "gpt-realtime-translate · 翻訳のみ",
-                chineseSimplified: "gpt-realtime-translate · 仅翻译"
+                english: "Custom LLM API",
+                korean: "Custom LLM API",
+                japanese: "Custom LLM API",
+                chineseSimplified: "自定义 LLM API"
             )
+        case .googleTranslate:
+            "Google Translate"
+        case .deepLFree:
+            "DeepL Free"
+        case .deepLPro:
+            "DeepL Pro"
         }
     }
 
@@ -121,15 +135,14 @@ enum OpenAIRealtimeTranslationModel: String, CaseIterable, Identifiable {
     }
 
     var usesRealtimeAudioTranslation: Bool {
-        self != .off
+        false
     }
 
     var apiModelID: String {
-        switch self {
-        case .off:
-            ""
-        case .gptRealtimeTranslate, .gptRealtimeTranslateOnly:
-            "gpt-realtime-translate"
-        }
+        ""
+    }
+
+    var textFallbackModelID: String {
+        ""
     }
 }

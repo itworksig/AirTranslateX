@@ -30,9 +30,9 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
 
         let panel = window ?? makeWindow(session: session)
         panel.contentView = NSHostingView(rootView: FloatingCaptionWindowView(session: session))
-        configure(panel)
+        configure(panel, placement: session.floatingCaptionPlacement)
         if window == nil {
-            positionForFirstOpen(panel)
+            positionForFirstOpen(panel, placement: session.floatingCaptionPlacement)
         }
         window = panel
         panel.orderFrontRegardless()
@@ -52,7 +52,9 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow(session: TranslationSessionStore) -> NSPanel {
-        let size = NSSize(width: 720, height: 170)
+        let size: NSSize = session.floatingCaptionPlacement == .notchIsland
+            ? NSSize(width: 520, height: 96)
+            : NSSize(width: 720, height: 170)
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -65,10 +67,10 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
         return panel
     }
 
-    private func configure(_ panel: NSPanel) {
+    private func configure(_ panel: NSPanel, placement: FloatingCaptionPlacement) {
         panel.identifier = NSUserInterfaceItemIdentifier(AirTranslateWindowID.floatingCaptions)
         panel.title = AppText.floatingCaptions
-        panel.level = .floating
+        panel.level = placement == .notchIsland ? .statusBar : .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
@@ -80,12 +82,19 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
         panel.hasShadow = false
     }
 
-    private func positionForFirstOpen(_ panel: NSPanel) {
-        guard let visibleFrame = NSScreen.main?.visibleFrame else { return }
+    private func positionForFirstOpen(_ panel: NSPanel, placement: FloatingCaptionPlacement) {
+        guard let screen = NSScreen.main else { return }
 
         let frame = panel.frame
-        let x = visibleFrame.midX - frame.width / 2
-        let y = visibleFrame.minY + min(180, visibleFrame.height * 0.18)
+        let x = screen.frame.midX - frame.width / 2
+        let y: CGFloat
+        switch placement {
+        case .lowerThird:
+            let visibleFrame = screen.visibleFrame
+            y = visibleFrame.minY + min(180, visibleFrame.height * 0.18)
+        case .notchIsland:
+            y = screen.frame.maxY - frame.height - 6
+        }
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
