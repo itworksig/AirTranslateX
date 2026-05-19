@@ -2,7 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
-final class DeepgramRealtimeTranscriber: @unchecked Sendable {
+final class DeepgramRealtimeTranscriber: TranscriptionProvider, @unchecked Sendable {
     private static let sampleRate = 24_000
     private static let maxAudioChunkMilliseconds = 100
     private static let bytesPerPCM16Sample = 2
@@ -12,22 +12,40 @@ final class DeepgramRealtimeTranscriber: @unchecked Sendable {
         / 1_000
 
     weak var delegate: LiveSpeechTranscriberDelegate?
+    let delegateToken = LiveSpeechTranscriber()
 
     private let stateLock = NSLock()
     private let conversionLock = NSLock()
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectAttempts = 0
+    private var lastAPIKey = ""
     private var language = LanguageOption.english
+    private var scenarioMode = CaptionScenarioMode.standard
     private var isPaused = false
+    private var isStopped = true
 
     func start(language: LanguageOption) async throws {
+        try await start(language: language, scenarioMode: .standard)
+    }
+
+    func start(language: LanguageOption, scenarioMode: CaptionScenarioMode) async throws {
         stop()
 
         guard let apiKey = try DeepgramAPIKeyStore.readAPIKey(), !apiKey.isEmpty else {
             throw OpenAITranslationError.missingAPIKey
         }
 
+        lastAPIKey = apiKey
         self.language = language
+        self.scenarioMode = scenarioMode
+        isStopped = false
+        reconnectAttempts = 0
+        try await connect(apiKey: apiKey, language: language, scenarioMode: scenarioMode)
+    }
+
+    private func connect(apiKey: String, language: LanguageOption, scenarioMode: CaptionScenarioMode) async throws {
         var components = URLComponents(string: "wss://api.deepgram.com/v1/listen")!
         components.queryItems = [
             URLQueryItem(name: "model", value: "nova-3"),
@@ -37,7 +55,10 @@ final class DeepgramRealtimeTranscriber: @unchecked Sendable {
             URLQueryItem(name: "channels", value: "1"),
             URLQueryItem(name: "interim_results", value: "true"),
             URLQueryItem(name: "punctuate", value: "true"),
-            URLQueryItem(name: "smart_format", value: "true")
+            URLQueryItem(name: "smart_format", value: "true"),
+            URLQueryItem(name: "endpointing", value: "\(scenarioMode.deepgramEndpointingMilliseconds)"),
+            URLQueryItem(name: "utterance_end_ms", value: "\(scenarioMode.deepgramUtteranceEndMilliseconds)"),
+            URLQueryItem(name: "vad_events", value: "true")
         ]
         guard let url = components.url else {
             throw OpenAITranslationError.invalidEndpoint
@@ -49,6 +70,7 @@ final class DeepgramRealtimeTranscriber: @unchecked Sendable {
         let webSocketTask = URLSession.shared.webSocketTask(with: request)
         self.webSocketTask = webSocketTask
         webSocketTask.resume()
+        delegate?.liveSpeechTranscriber(delegateToken, didUpdateStatus: AppText.deepgramConnectedStatus)
 
         receiveTask = Task { [weak self] in
             await self?.receiveLoop()
@@ -70,7 +92,7 @@ final class DeepgramRealtimeTranscriber: @unchecked Sendable {
         for chunk in chunks {
             webSocketTask.send(.data(chunk)) { [weak self] error in
                 guard let error, let self else { return }
-                self.delegate?.liveSpeechTranscriber(self.proxyTranscriber, didFail: error)
+                self.delegate?.liveSpeechTranscriber(self.delegateToken, didFail: error)
             }
         }
     }
@@ -82,7 +104,10 @@ final class DeepgramRealtimeTranscriber: @unchecked Sendable {
     }
 
     func stop() {
+        isStopped = true
         setPaused(false)
+        reconnectTask?.cancel()
+        reconnectTask = nil
         receiveTask?.cancel()
         receiveTask = nil
         webSocketTask?.cancel(with: .goingAway, reason: nil)
@@ -98,10 +123,50 @@ final class DeepgramRealtimeTranscriber: @unchecked Sendable {
                 handleEventText(text)
             } catch {
                 guard !Task.isCancelled else { return }
-                delegate?.liveSpeechTranscriber(proxyTranscriber, didFail: error)
+                scheduleReconnect(after: error)
                 return
             }
         }
+    }
+
+    private func scheduleReconnect(after error: Error) {
+        stateLock.lock()
+        let shouldReconnect = !isStopped && reconnectTask == nil && reconnectAttempts < 5
+        reconnectAttempts += 1
+        let attempt = reconnectAttempts
+        stateLock.unlock()
+
+        guard shouldReconnect else {
+            delegate?.liveSpeechTranscriber(delegateToken, didFail: error)
+            return
+        }
+
+        delegate?.liveSpeechTranscriber(delegateToken, didUpdateStatus: AppText.deepgramReconnectingStatus(attempt: attempt))
+        reconnectTask = Task { [weak self] in
+            let delay = min(8, Double(attempt) * 1.5)
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            do {
+                try await self.connect(apiKey: self.lastAPIKey, language: self.language, scenarioMode: self.scenarioMode)
+                self.markReconnectSucceeded()
+            } catch {
+                self.markReconnectFailed()
+                self.scheduleReconnect(after: error)
+            }
+        }
+    }
+
+    private func markReconnectSucceeded() {
+        stateLock.lock()
+        reconnectAttempts = 0
+        reconnectTask = nil
+        stateLock.unlock()
+    }
+
+    private func markReconnectFailed() {
+        stateLock.lock()
+        reconnectTask = nil
+        stateLock.unlock()
     }
 
     private func handleEventText(_ text: String) {
@@ -114,7 +179,7 @@ final class DeepgramRealtimeTranscriber: @unchecked Sendable {
         }
 
         delegate?.liveSpeechTranscriber(
-            proxyTranscriber,
+            delegateToken,
             didRecognize: transcript,
             language: language,
             confidence: response.channel?.alternatives.first?.confidence ?? 0.8
@@ -200,9 +265,6 @@ final class DeepgramRealtimeTranscriber: @unchecked Sendable {
         return chunks
     }
 
-    private var proxyTranscriber: LiveSpeechTranscriber {
-        LiveSpeechTranscriber()
-    }
 }
 
 enum DeepgramAPIKeyTester {

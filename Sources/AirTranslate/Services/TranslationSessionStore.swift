@@ -13,6 +13,7 @@ private enum SettingsKey {
     static let customLLMBaseURL = "customLLMBaseURL"
     static let customLLMModel = "customLLMModel"
     static let isDubbingEnabled = "isDubbingEnabled"
+    static let isAdvancedInterpretationEnabled = "isAdvancedInterpretationEnabled"
     static let isTranscriptLintEnabled = "isTranscriptLintEnabled"
     static let floatingCaptionDisplayMode = "floatingCaptionDisplayMode"
     static let floatingCaptionPlacement = "floatingCaptionPlacement"
@@ -24,10 +25,11 @@ private enum SettingsKey {
     static let floatingCaptionBackgroundOpacity = "floatingCaptionBackgroundOpacity"
     static let paragraphBreakSilenceInterval = "paragraphBreakSilenceInterval"
     static let savedTranscriptContentMode = "savedTranscriptContentMode"
-    static let sessionDurationMode = "sessionDurationMode"
     static let audioInputSource = "audioInputSource"
     static let selectedMicrophoneInputDeviceID = "selectedMicrophoneInputDeviceID"
     static let isAppleSourceAutoDetectionEnabled = "isAppleSourceAutoDetectionEnabled"
+    static let captionScenarioMode = "captionScenarioMode"
+    static let captionResponsivenessMode = "captionResponsivenessMode"
 }
 
 private struct TranslationRequest {
@@ -36,6 +38,7 @@ private struct TranslationRequest {
     let translationSourceText: String
     let source: LanguageOption
     let target: LanguageOption
+    let context: TranslationContext?
 }
 
 private struct PendingCaptionPresentation {
@@ -44,6 +47,13 @@ private struct PendingCaptionPresentation {
     let isFinal: Bool
     let source: LanguageOption
     let target: LanguageOption
+}
+
+private struct BidirectionalRecognitionCandidate {
+    let text: String
+    let language: LanguageOption
+    let confidence: Double
+    let receivedAt: Date
 }
 
 struct AutoDetectionLanguageChangeConfirmation: Equatable {
@@ -81,18 +91,20 @@ enum AutoDetectionLanguageChangePolicy {
 @Observable
 @MainActor
 final class TranslationSessionStore {
-    nonisolated static let aiModeDefaultTranscriptionModel = OpenAIRealtimeTranscriptionModel.deepgramStreaming
-    nonisolated static let aiModeDefaultTranslationModel = OpenAIRealtimeTranslationModel.customLLMAPI
+    nonisolated static let aiModeDefaultTranscriptionModel = AITranscriptionModel.deepgramStreaming
+    nonisolated static let aiModeDefaultTranslationModel = AITranslationModel.customLLMAPI
 
     private static let maxTranslationCacheEntries = 2_000
     private static let largeTranscriptPresentationCharacterLimit = 4_000
     private static let largeTranscriptPresentationInterval: TimeInterval = 0.35
     private static let largeTranscriptTranslationCharacterLimit = 4_000
     private static let veryLargeTranscriptTranslationCharacterLimit = 10_000
-    private static let floatingCaptionEarlyRevisionWindow = 0.45
-    private static let floatingCaptionImmediateExtensionCharacterLimit = 28
-    private static let minimumFloatingCaptionDwell = 1.4
-    private static let maximumFloatingCaptionDwell = 3.6
+    private static let maximumVisibleCaptionLines = 240
+    private static let visibleCaptionLineTrimBatch = 80
+    private static let floatingCaptionEarlyRevisionWindow = 1.0
+    private static let floatingCaptionImmediateExtensionCharacterLimit = 120
+    private static let minimumFloatingCaptionDwell = 0.12
+    private static let maximumFloatingCaptionDwell = 0.45
     private static let appleAutoDetectionMinimumConfidence = 0.35
     private static let appleAutoDetectionLanguageSwitchMinimumConfidence = 0.72
     private static let isAppleSourceAutoDetectionTemporarilyDisabled = true
@@ -102,9 +114,10 @@ final class TranslationSessionStore {
     var isDubbingEnabled = false {
         didSet {
             persistSelectedSettings()
+            speechOutputRuntimeDetail = currentSpeechOutputRuntimeDetail()
             if isDubbingEnabled {
-                if isUsingOpenAIRealtimeTranslation {
-                    openAIRealtimeAudioOutput.stop()
+                if isUsingRealtimeTranslation {
+                    realtimeAudioOutput.stop()
                 } else {
                     primeDubbingBaselineToCurrentTranslation()
                 }
@@ -114,6 +127,41 @@ final class TranslationSessionStore {
                 clearSpokenTranslationUnits()
             }
         }
+    }
+    var isAdvancedInterpretationEnabled = false {
+        didSet {
+            persistSelectedSettings()
+            speechOutputRuntimeDetail = currentSpeechOutputRuntimeDetail()
+            if isAdvancedInterpretationEnabled {
+                audioInputSource = .systemAudio
+                isDubbingEnabled = true
+                if isRunning {
+                    Task { @MainActor in
+                        do {
+                            try await startAdvancedInterpretation()
+                            statusMessage = AppText.localized(
+                                english: "Advanced interpretation enabled.",
+                                korean: "고급 동시통역이 켜졌습니다.",
+                                japanese: "高度同時通訳を有効にしました。",
+                                chineseSimplified: "高级同传已开启。"
+                            )
+                        } catch {
+                            isAdvancedInterpretationEnabled = false
+                            statusMessage = error.localizedDescription
+                        }
+                    }
+                }
+            } else if oldValue {
+                isDubbingEnabled = false
+                stopAdvancedInterpretation()
+            }
+        }
+    }
+    var captionScenarioMode = CaptionScenarioMode.standard {
+        didSet { persistSelectedSettings() }
+    }
+    var captionResponsivenessMode = CaptionResponsivenessMode.balanced {
+        didSet { persistSelectedSettings() }
     }
     var sourceLanguage = LanguageOption.supported[0] {
         didSet {
@@ -155,7 +203,7 @@ final class TranslationSessionStore {
     var customLLMConfiguration: CustomLLMAPIConfiguration {
         CustomLLMAPIConfiguration(baseURL: customLLMBaseURL, model: customLLMModel)
     }
-    var openAITranscriptionModel = OpenAIRealtimeTranscriptionModel.off {
+    var openAITranscriptionModel = AITranscriptionModel.off {
         didSet {
             if openAITranscriptionModel.isEnabled {
                 isTranscriptLintEnabled = false
@@ -165,7 +213,7 @@ final class TranslationSessionStore {
             refreshModelAvailability()
         }
     }
-    var openAITranslationModel = OpenAIRealtimeTranslationModel.off {
+    var openAITranslationModel = AITranslationModel.off {
         didSet {
             if openAITranslationModel.isEnabled {
                 isTranscriptLintEnabled = false
@@ -188,7 +236,7 @@ final class TranslationSessionStore {
     var floatingCaptionTextSize = FloatingCaptionTextSize.medium {
         didSet { persistSelectedSettings() }
     }
-    var floatingCaptionLineCount = FloatingCaptionLineCount.three {
+    var floatingCaptionLineCount = FloatingCaptionLineCount.two {
         didSet { persistSelectedSettings() }
     }
     var floatingCaptionFontStyle = FloatingCaptionFontStyle.rounded {
@@ -214,9 +262,6 @@ final class TranslationSessionStore {
         didSet { persistSelectedSettings() }
     }
     var savedTranscriptContentMode = SavedTranscriptContentMode.original {
-        didSet { persistSelectedSettings() }
-    }
-    var sessionDurationMode = SessionDurationMode.standard {
         didSet { persistSelectedSettings() }
     }
     var isAppleSourceAutoDetectionEnabled = false {
@@ -245,12 +290,23 @@ final class TranslationSessionStore {
     var hasGoogleTranslateAPIKey = GoogleTranslateAPIKeyStore.hasAPIKey()
     var isGoogleTranslateAPIConnectionTestRunning = false
     var googleTranslateAPIConnectionTestMessage: String?
+    var hasGoogleTTSAPIKey = GoogleTTSAPIKeyStore.hasAPIKey()
+    var isGoogleTTSAPIConnectionTestRunning = false
+    var googleTTSAPIConnectionTestMessage: String?
     var hasDeepLFreeAPIKey = DeepLFreeAPIKeyStore.hasAPIKey()
     var isDeepLFreeAPIConnectionTestRunning = false
     var deepLFreeAPIConnectionTestMessage: String?
     var hasDeepLProAPIKey = DeepLProAPIKeyStore.hasAPIKey()
     var isDeepLProAPIConnectionTestRunning = false
     var deepLProAPIConnectionTestMessage: String?
+    var isCurrentPipelineTestRunning = false
+    var currentPipelineTestMessage: String?
+    var lastProviderRequestDurationText: String?
+    var transcriptionRuntimeStatus = ProviderRuntimeStatus.idle
+    var transcriptionRuntimeDetail = AppText.localized(english: "Ready", korean: "준비됨", japanese: "待機中", chineseSimplified: "就绪")
+    var translationRuntimeStatus = ProviderRuntimeStatus.idle
+    var translationRuntimeDetail = AppText.localized(english: "Ready", korean: "준비됨", japanese: "待機中", chineseSimplified: "就绪")
+    var speechOutputRuntimeDetail = AppText.localized(english: "Voice output off", korean: "음성 출력 꺼짐", japanese: "音声出力オフ", chineseSimplified: "语音输出关闭")
     var lines: [CaptionLine] = []
     var savedTranscripts: [SavedTranscript] = []
     var selectedSavedTranscriptID: String?
@@ -267,15 +323,20 @@ final class TranslationSessionStore {
 
     private let systemAudioCapture = SystemAudioCapture()
     private var microphoneAudioCapture = MicrophoneAudioCapture()
+    @ObservationIgnored nonisolated(unsafe) private var interpretationMicrophoneCapture = MicrophoneAudioCapture()
     @ObservationIgnored nonisolated(unsafe) private var transcriber = LiveSpeechTranscriber()
     @ObservationIgnored nonisolated(unsafe) private var speechCaptioner = SpeechCaptioner()
-    @ObservationIgnored nonisolated(unsafe) private var openAITranscriber = OpenAIRealtimeTranscriber()
+    @ObservationIgnored nonisolated(unsafe) private var interpretationTranscriber = LiveSpeechTranscriber()
+    @ObservationIgnored nonisolated(unsafe) private var interpretationSpeechCaptioner = SpeechCaptioner()
+    @ObservationIgnored nonisolated(unsafe) private var aiRealtimeTranscriber = AIRealtimeTranscriber()
     @ObservationIgnored nonisolated(unsafe) private var deepgramTranscriber = DeepgramRealtimeTranscriber()
+    @ObservationIgnored nonisolated(unsafe) private var deepgramTargetTranscriber = DeepgramRealtimeTranscriber()
     private let translator = AppleTranslationService()
     private let openAITranslator = OpenAITranslationService()
     private let foundationTranscriptPolisher = FoundationTranscriptPolisher()
     private let speechOutput = TranslatedSpeechOutput()
-    private let openAIRealtimeAudioOutput = OpenAIRealtimeAudioOutput()
+    private let deepgramSpeechOutput = DeepgramSpeechOutput()
+    private let realtimeAudioOutput = RealtimeAudioOutput()
     private let spellChecker = NSSpellChecker.shared
     private let spellDocumentTag = NSSpellChecker.uniqueSpellDocumentTag()
     private var audioSampleCount = 0
@@ -289,7 +350,10 @@ final class TranslationSessionStore {
     private var transcriptCleanupTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
     private var latestTranslationRequest: TranslationRequest?
+    private var activeTranslationRequestSourceText = ""
     private var translationBurstStartedAt = Date.distantPast
+    private var lastCompletedTranslationSourceText = ""
+    private var lastCompletedTranslationText = ""
     private var committedSourceText = ""
     private var currentPartialText = ""
     private var currentPartialLanguage: LanguageOption?
@@ -320,6 +384,11 @@ final class TranslationSessionStore {
     private var lastSpokenTranslatedText = ""
     private var spokenTranslationUnitKeys: Set<String> = []
     private var spokenTranslationUnitKeyOrder: [String] = []
+    private var lastRecognizedInterpretationText = ""
+    private var lastSpokenInterpretationText = ""
+    private var bidirectionalRecognitionCandidates: [BidirectionalRecognitionCandidate] = []
+    private var bidirectionalRecognitionTask: Task<Void, Never>?
+    private var ownSpeechOutputSuppressedUntil = Date.distantPast
 
     private enum SavedTranscriptPart {
         case original
@@ -327,18 +396,18 @@ final class TranslationSessionStore {
     }
 
     private var usesLongSessionMode: Bool {
-        sessionDurationMode == .thirtyMinutesOrMore
+        false
     }
 
     var shouldCoalesceTranscriptAutoScroll: Bool {
-        usesLongSessionMode && !isUsingOpenAIRealtime
+        false
     }
 
-    var isUsingOpenAIRealtime: Bool {
-        openAITranscriptionModel.isEnabled || isUsingOpenAIRealtimeTranslation
+    var isUsingAIRealtime: Bool {
+        openAITranscriptionModel.isEnabled || isUsingRealtimeTranslation
     }
 
-    var isUsingOpenAIRealtimeTranslation: Bool {
+    var isUsingRealtimeTranslation: Bool {
         openAITranslationModel.usesRealtimeAudioTranslation && targetLanguage == .english
     }
 
@@ -358,7 +427,7 @@ final class TranslationSessionStore {
         systemAudioCapture.delegate = self
         microphoneAudioCapture.delegate = self
         transcriber.delegate = self
-        openAITranscriber.delegate = self
+        aiRealtimeTranscriber.delegate = self
         loadSavedTranscripts()
         loadProductHuntScreenshotDemoIfRequested()
         refreshModelAvailability()
@@ -427,9 +496,9 @@ final class TranslationSessionStore {
                     return
                 }
                 statusMessage = AppText.startingCapture(for: audioInputSource)
-                let usesOpenAIRealtimeAudio = openAITranscriptionModel.isEnabled
-                    || isUsingOpenAIRealtimeTranslation
-                let sampleRate = usesOpenAIRealtimeAudio ? 24_000 : 16_000
+                let usesRealtimeAudio = openAITranscriptionModel.isEnabled
+                    || isUsingRealtimeTranslation
+                let sampleRate = usesRealtimeAudio ? 24_000 : 16_000
                 switch audioInputSource {
                 case .systemAudio:
                     try await systemAudioCapture.start(sampleRate: sampleRate)
@@ -438,6 +507,9 @@ final class TranslationSessionStore {
                         sampleRate: sampleRate,
                         deviceUniqueID: selectedMicrophoneDevice.uniqueID
                     )
+                }
+                if isAdvancedInterpretationEnabled {
+                    try await startAdvancedInterpretation()
                 }
                 guard !Task.isCancelled, isRunning else {
                     await stopCapture()
@@ -475,6 +547,49 @@ final class TranslationSessionStore {
 
         Task {
             await stopCapture()
+        }
+    }
+
+    func clearCurrentTranscript() {
+        pendingTranslationSourceText = ""
+        latestTranslationRequest = nil
+        activeTranslationRequestSourceText = ""
+        lastCompletedTranslationSourceText = ""
+        lastCompletedTranslationText = ""
+        committedSourceText = ""
+        currentPartialText = ""
+        currentPartialLanguage = nil
+        currentLineID = nil
+        sourceLanguageByLineID.removeAll()
+        lines.removeAll()
+        activeAutosaveSourceText = ""
+        activeAutosaveTranslatedText = ""
+        floatingCommittedSourceText = ""
+        floatingCurrentPartialText = ""
+        floatingPresentedSourceText = ""
+        floatingQueuedSourceText = ""
+        floatingDisplayTranslationText = ""
+        floatingDisplayTranslationSourceText = ""
+        floatingQueuedTranslationText = ""
+        floatingQueuedTranslationSourceText = ""
+        pendingCaptionPresentation = nil
+        captionPresentationTask?.cancel()
+        captionPresentationTask = nil
+        translationTask?.cancel()
+        translationTask = nil
+        resetTranslationCache()
+        resetDubbingProgress()
+        statusMessage = isRunning ? AppText.listeningForSpeech(from: audioInputSource) : AppText.ready
+    }
+
+    func deleteCaptionLine(id: UUID) {
+        lines.removeAll { $0.id == id }
+        sourceLanguageByLineID.removeValue(forKey: id)
+        if currentLineID == id {
+            currentLineID = lines.last?.id
+        }
+        if lines.isEmpty {
+            clearCurrentTranscript()
         }
     }
 
@@ -685,6 +800,52 @@ final class TranslationSessionStore {
         )
     }
 
+    func saveGoogleTTSAPIKey(_ key: String) {
+        do {
+            try GoogleTTSAPIKeyStore.saveAPIKey(key)
+            hasGoogleTTSAPIKey = true
+            googleTTSAPIConnectionTestMessage = nil
+            speechOutputRuntimeDetail = currentSpeechOutputRuntimeDetail()
+            statusMessage = AppText.providerAPIKeySaved("Google TTS")
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func removeGoogleTTSAPIKey() {
+        do {
+            try GoogleTTSAPIKeyStore.deleteAPIKey()
+            hasGoogleTTSAPIKey = false
+            googleTTSAPIConnectionTestMessage = nil
+            speechOutputRuntimeDetail = currentSpeechOutputRuntimeDetail()
+            statusMessage = AppText.providerAPIKeyRemoved("Google TTS")
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func testGoogleTTSAPIConnection() {
+        guard hasGoogleTTSAPIKey else {
+            googleTTSAPIConnectionTestMessage = AppText.providerAPIConnectionFailed("Google TTS", message: AppText.googleTranslateAPIKeyMissing)
+            return
+        }
+
+        isGoogleTTSAPIConnectionTestRunning = true
+        googleTTSAPIConnectionTestMessage = AppText.providerAPIConnectionTesting("Google TTS")
+        Task { @MainActor in
+            do {
+                try await deepgramSpeechOutput.testGoogleConnection()
+                googleTTSAPIConnectionTestMessage = AppText.providerAPIConnectionSucceeded("Google TTS")
+                statusMessage = AppText.providerAPIConnectionSucceeded("Google TTS")
+            } catch {
+                let message = AppText.providerAPIConnectionFailed("Google TTS", message: error.localizedDescription)
+                googleTTSAPIConnectionTestMessage = message
+                statusMessage = message
+            }
+            isGoogleTTSAPIConnectionTestRunning = false
+        }
+    }
+
     func saveDeepLFreeAPIKey(_ key: String) {
         do {
             try DeepLFreeAPIKeyStore.saveAPIKey(key)
@@ -749,9 +910,85 @@ final class TranslationSessionStore {
         )
     }
 
+    func testCurrentAIPipeline() {
+        guard !isCurrentPipelineTestRunning else { return }
+
+        isCurrentPipelineTestRunning = true
+        currentPipelineTestMessage = AppText.localized(
+            english: "Testing AI pipeline...",
+            korean: "AI 경로 테스트 중...",
+            japanese: "AI経路をテスト中...",
+            chineseSimplified: "正在测试 AI 链路..."
+        )
+        let startedAt = Date()
+        let transcriptionModel = openAITranscriptionModel
+        let translationModel = openAITranslationModel
+        let configuration = customLLMConfiguration
+        let hasDeepgramKey = hasDeepgramAPIKey
+        let hasOpenAIKey = hasOpenAIAPIKey
+        let hasGoogleKey = hasGoogleTranslateAPIKey
+        let hasDeepLFreeKey = hasDeepLFreeAPIKey
+        let hasDeepLProKey = hasDeepLProAPIKey
+
+        Task { @MainActor in
+            do {
+                if transcriptionModel == .deepgramStreaming {
+                    guard hasDeepgramKey else {
+                        throw OpenAITranslationError.missingDeepLAPIKey
+                    }
+                    try await DeepgramAPIKeyTester.testConnection()
+                }
+
+                switch translationModel {
+                case .customLLMAPI:
+                    guard hasOpenAIKey else { throw OpenAITranslationError.missingAPIKey }
+                case .googleTranslate:
+                    guard hasGoogleKey else { throw OpenAITranslationError.missingGoogleAPIKey }
+                case .deepLFree:
+                    guard hasDeepLFreeKey else { throw OpenAITranslationError.missingDeepLAPIKey }
+                case .deepLPro:
+                    guard hasDeepLProKey else { throw OpenAITranslationError.missingDeepLAPIKey }
+                case .off:
+                    break
+                }
+
+                if translationModel.isEnabled {
+                    try await openAITranslator.testConnection(
+                        translationModel: translationModel,
+                        configuration: configuration
+                    )
+                }
+
+                let elapsed = Date().timeIntervalSince(startedAt)
+                lastProviderRequestDurationText = String(format: "%.0f ms", elapsed * 1_000)
+                let message = AppText.localized(
+                    english: "AI pipeline works.",
+                    korean: "AI 경로가 정상입니다.",
+                    japanese: "AI経路は正常です。",
+                    chineseSimplified: "AI 链路正常。"
+                )
+                currentPipelineTestMessage = message
+                statusMessage = message
+            } catch {
+                let elapsed = Date().timeIntervalSince(startedAt)
+                lastProviderRequestDurationText = String(format: "%.0f ms", elapsed * 1_000)
+                let message = AppText.localized(
+                    english: "AI pipeline failed: \(error.localizedDescription)",
+                    korean: "AI 경로 실패: \(error.localizedDescription)",
+                    japanese: "AI経路失敗: \(error.localizedDescription)",
+                    chineseSimplified: "AI 链路失败：\(error.localizedDescription)"
+                )
+                currentPipelineTestMessage = message
+                statusMessage = message
+            }
+
+            isCurrentPipelineTestRunning = false
+        }
+    }
+
     private func testTranslationProviderConnection(
         provider: String,
-        model: OpenAIRealtimeTranslationModel,
+        model: AITranslationModel,
         hasKey: Bool,
         isRunning: ReferenceWritableKeyPath<TranslationSessionStore, Bool>,
         message: ReferenceWritableKeyPath<TranslationSessionStore, String?>
@@ -821,7 +1058,7 @@ final class TranslationSessionStore {
     }
 
     var languageSummary: String {
-        if isUsingOpenAIRealtimeTranslation {
+        if isUsingRealtimeTranslation {
             return AppText.openAILanguageSummary(target: targetLanguage.localizedTitle)
         }
         if isUsingAppleSourceAutoDetection {
@@ -917,12 +1154,6 @@ final class TranslationSessionStore {
             guard !translatedText.isEmpty, translatedText != AppText.translating else {
                 return ""
             }
-            guard floatingDisplayTranslationSourceText.isEmpty
-                || translationSource(floatingDisplayTranslationSourceText, matches: displaySourceText)
-            else {
-                return ""
-            }
-
             return floatingCaptionText(from: translatedText)
         }
 
@@ -1072,33 +1303,97 @@ final class TranslationSessionStore {
         transcriber.delegate = self
         speechCaptioner = SpeechCaptioner()
         speechCaptioner.delegate = self
-        openAITranscriber = OpenAIRealtimeTranscriber()
-        openAITranscriber.delegate = self
+        aiRealtimeTranscriber = AIRealtimeTranscriber()
+        aiRealtimeTranscriber.delegate = self
         deepgramTranscriber = DeepgramRealtimeTranscriber()
         deepgramTranscriber.delegate = self
+        deepgramTargetTranscriber = DeepgramRealtimeTranscriber()
+        deepgramTargetTranscriber.delegate = self
 
-        if isUsingOpenAIRealtimeTranslation {
-            try await openAITranscriber.startRealtimeTranslationOnly(
+        if isUsingRealtimeTranslation {
+            try await aiRealtimeTranscriber.startRealtimeTranslationOnly(
                 language: targetLanguage,
                 model: openAITranslationModel
             )
         } else if openAITranscriptionModel == .deepgramStreaming {
-            try await deepgramTranscriber.start(language: sourceLanguage)
-        } else if openAITranscriptionModel.isEnabled {
-            try await openAITranscriber.start(language: sourceLanguage, model: openAITranscriptionModel)
-        } else {
-            if shouldUseLegacySpeechRecognizer {
-                statusMessage = AppText.legacySpeechRecognizerFallback(source: sourceLanguage.localizedTitle)
-                try await speechCaptioner.start(locale: sourceLanguage.locale)
-                return
-            }
             do {
-                try await transcriber.start(languages: await appleSpeechLanguagesForCurrentMode())
-            } catch SpeechError.recognizerUnavailable where !isUsingAppleSourceAutoDetection {
-                statusMessage = AppText.legacySpeechRecognizerFallback(source: sourceLanguage.localizedTitle)
-                try await speechCaptioner.start(locale: sourceLanguage.locale)
+                try await deepgramTranscriber.start(language: sourceLanguage, scenarioMode: captionScenarioMode)
+                let usesBidirectionalDeepgram = isAdvancedInterpretationEnabled
+                    && !sameLanguageFamily(sourceLanguage, targetLanguage)
+                if usesBidirectionalDeepgram {
+                    try await deepgramTargetTranscriber.start(language: targetLanguage, scenarioMode: captionScenarioMode)
+                }
+                transcriptionRuntimeStatus = .stable
+                transcriptionRuntimeDetail = usesBidirectionalDeepgram
+                    ? "Deepgram \(sourceLanguage.localizedTitle) + \(targetLanguage.localizedTitle)"
+                    : "Deepgram"
+            } catch {
+                transcriptionRuntimeStatus = .fallback
+                transcriptionRuntimeDetail = AppText.localized(
+                    english: "Deepgram failed, using Apple Speech",
+                    korean: "Deepgram 실패, Apple Speech 사용",
+                    japanese: "Deepgram失敗、Apple Speechを使用",
+                    chineseSimplified: "Deepgram 失败，已切到 Apple Speech"
+                )
+                statusMessage = transcriptionRuntimeDetail
+                try await startAppleSpeechCaptioner()
             }
+        } else if openAITranscriptionModel.isEnabled {
+            try await aiRealtimeTranscriber.start(language: sourceLanguage, model: openAITranscriptionModel)
+        } else {
+            try await startAppleSpeechCaptioner()
         }
+    }
+
+    private func startAppleSpeechCaptioner() async throws {
+        if shouldUseLegacySpeechRecognizer {
+            statusMessage = AppText.legacySpeechRecognizerFallback(source: sourceLanguage.localizedTitle)
+            try await speechCaptioner.start(locale: sourceLanguage.locale)
+            transcriptionRuntimeStatus = .stable
+            transcriptionRuntimeDetail = AppText.localized(english: "Apple Speech", korean: "Apple Speech", japanese: "Apple Speech", chineseSimplified: "Apple Speech")
+            return
+        }
+        do {
+            try await transcriber.start(languages: await appleSpeechLanguagesForCurrentMode())
+            transcriptionRuntimeStatus = .stable
+            transcriptionRuntimeDetail = AppText.localized(english: "Apple Speech", korean: "Apple Speech", japanese: "Apple Speech", chineseSimplified: "Apple Speech")
+        } catch SpeechError.recognizerUnavailable where !isUsingAppleSourceAutoDetection {
+            statusMessage = AppText.legacySpeechRecognizerFallback(source: sourceLanguage.localizedTitle)
+            try await speechCaptioner.start(locale: sourceLanguage.locale)
+            transcriptionRuntimeStatus = .stable
+            transcriptionRuntimeDetail = AppText.localized(english: "Apple Speech", korean: "Apple Speech", japanese: "Apple Speech", chineseSimplified: "Apple Speech")
+        }
+    }
+
+    private func startAdvancedInterpretation() async throws {
+        stopAdvancedInterpretation()
+        lastRecognizedInterpretationText = ""
+        lastSpokenInterpretationText = ""
+        interpretationTranscriber = LiveSpeechTranscriber()
+        interpretationTranscriber.delegate = self
+        interpretationSpeechCaptioner = SpeechCaptioner()
+        interpretationSpeechCaptioner.delegate = self
+        do {
+            try await interpretationTranscriber.start(languages: [sourceLanguage, targetLanguage])
+        } catch {
+            try await interpretationSpeechCaptioner.start(locale: targetLanguage.locale)
+        }
+        interpretationMicrophoneCapture.delegate = self
+        try await interpretationMicrophoneCapture.start(
+            sampleRate: 16_000,
+            deviceUniqueID: selectedMicrophoneDevice.uniqueID
+        )
+    }
+
+    private func stopAdvancedInterpretation() {
+        interpretationMicrophoneCapture.delegate = nil
+        interpretationMicrophoneCapture.stop()
+        interpretationTranscriber.delegate = nil
+        interpretationTranscriber.stop()
+        interpretationSpeechCaptioner.delegate = nil
+        interpretationSpeechCaptioner.stop()
+        lastRecognizedInterpretationText = ""
+        lastSpokenInterpretationText = ""
     }
 
     private var shouldUseLegacySpeechRecognizer: Bool {
@@ -1125,26 +1420,36 @@ final class TranslationSessionStore {
     }
 
     private func stopCaptioners() {
+        stopAdvancedInterpretation()
         transcriber.delegate = nil
         speechCaptioner.delegate = nil
-        openAITranscriber.delegate = nil
+        aiRealtimeTranscriber.delegate = nil
         deepgramTranscriber.delegate = nil
+        deepgramTargetTranscriber.delegate = nil
         transcriber.stop()
         speechCaptioner.stop()
-        openAITranscriber.stop()
+        aiRealtimeTranscriber.stop()
         deepgramTranscriber.stop()
+        deepgramTargetTranscriber.stop()
     }
 
     private func setCaptionersPaused(_ isPaused: Bool) {
         transcriber.setPaused(isPaused)
         speechCaptioner.setPaused(isPaused)
-        openAITranscriber.setPaused(isPaused)
+        aiRealtimeTranscriber.setPaused(isPaused)
         deepgramTranscriber.setPaused(isPaused)
+        deepgramTargetTranscriber.setPaused(isPaused)
     }
 
     private func resetLiveSessionState(clearsVisibleLines: Bool) {
         audioSampleCount = 0
         latestAudioLevel = nil
+        transcriptionRuntimeStatus = .idle
+        transcriptionRuntimeDetail = AppText.localized(english: "Ready", korean: "준비됨", japanese: "待機中", chineseSimplified: "就绪")
+        translationRuntimeStatus = .idle
+        translationRuntimeDetail = AppText.localized(english: "Ready", korean: "준비됨", japanese: "待機中", chineseSimplified: "就绪")
+        speechOutputRuntimeDetail = currentSpeechOutputRuntimeDetail()
+        lastProviderRequestDurationText = nil
         lastRecognizedText = ""
         lastRecognizedWasFinal = false
         currentLineID = nil
@@ -1155,6 +1460,9 @@ final class TranslationSessionStore {
         committedSourceText = ""
         currentPartialText = ""
         currentPartialLanguage = nil
+        bidirectionalRecognitionCandidates.removeAll()
+        bidirectionalRecognitionTask?.cancel()
+        bidirectionalRecognitionTask = nil
         appleAutoDetectionPreferredLanguage = nil
         pendingAutoDetectionLanguageChange = nil
         pendingParagraphBreakBeforePartial = false
@@ -1177,6 +1485,9 @@ final class TranslationSessionStore {
         }
         pendingTranslationSourceText = ""
         latestTranslationRequest = nil
+        activeTranslationRequestSourceText = ""
+        lastCompletedTranslationSourceText = ""
+        lastCompletedTranslationText = ""
         translationBurstStartedAt = Date.distantPast
         resetTranslationCache()
         realtimeTranslationOnlyText = ""
@@ -1257,14 +1568,14 @@ final class TranslationSessionStore {
             selectedModel = model == .appleOnDevice ? .appleSystem : model
         }
         if let modelID = defaults.string(forKey: SettingsKey.openAITranscriptionModelID),
-           let model = OpenAIRealtimeTranscriptionModel(rawValue: modelID) {
+           let model = AITranscriptionModel(rawValue: modelID) {
             openAITranscriptionModel = model
         } else if let modelID = defaults.string(forKey: SettingsKey.openAITranscriptionModelID),
                   modelID.hasPrefix("gpt") {
             openAITranscriptionModel = .deepgramStreaming
         }
         if let modelID = defaults.string(forKey: SettingsKey.openAITranslationModelID),
-           let model = OpenAIRealtimeTranslationModel(rawValue: modelID) {
+           let model = AITranslationModel(rawValue: modelID) {
             openAITranslationModel = model
         } else if let modelID = defaults.string(forKey: SettingsKey.openAITranslationModelID),
                   modelID.hasPrefix("gpt-realtime-") {
@@ -1278,6 +1589,12 @@ final class TranslationSessionStore {
         }
         if defaults.object(forKey: SettingsKey.isDubbingEnabled) != nil {
             isDubbingEnabled = defaults.bool(forKey: SettingsKey.isDubbingEnabled)
+        }
+        if defaults.object(forKey: SettingsKey.isAdvancedInterpretationEnabled) != nil {
+            isAdvancedInterpretationEnabled = defaults.bool(forKey: SettingsKey.isAdvancedInterpretationEnabled)
+        }
+        if !isAdvancedInterpretationEnabled {
+            isDubbingEnabled = false
         }
         if defaults.object(forKey: SettingsKey.isTranscriptLintEnabled) != nil {
             isTranscriptLintEnabled = defaults.bool(forKey: SettingsKey.isTranscriptLintEnabled)
@@ -1325,9 +1642,13 @@ final class TranslationSessionStore {
            let contentMode = SavedTranscriptContentMode(rawValue: contentModeID) {
             savedTranscriptContentMode = contentMode
         }
-        if let durationModeID = defaults.string(forKey: SettingsKey.sessionDurationMode),
-           let durationMode = SessionDurationMode(rawValue: durationModeID) {
-            sessionDurationMode = durationMode
+        if let scenarioModeID = defaults.string(forKey: SettingsKey.captionScenarioMode),
+           let scenarioMode = CaptionScenarioMode(rawValue: scenarioModeID) {
+            captionScenarioMode = scenarioMode
+        }
+        if let responsivenessModeID = defaults.string(forKey: SettingsKey.captionResponsivenessMode),
+           let responsivenessMode = CaptionResponsivenessMode(rawValue: responsivenessModeID) {
+            captionResponsivenessMode = responsivenessMode
         }
         if let audioInputSourceID = defaults.string(forKey: SettingsKey.audioInputSource),
            let source = AudioInputSource(rawValue: audioInputSourceID) {
@@ -1353,6 +1674,7 @@ final class TranslationSessionStore {
         defaults.set(customLLMBaseURL, forKey: SettingsKey.customLLMBaseURL)
         defaults.set(customLLMModel, forKey: SettingsKey.customLLMModel)
         defaults.set(isDubbingEnabled, forKey: SettingsKey.isDubbingEnabled)
+        defaults.set(isAdvancedInterpretationEnabled, forKey: SettingsKey.isAdvancedInterpretationEnabled)
         defaults.set(isTranscriptLintEnabled, forKey: SettingsKey.isTranscriptLintEnabled)
         defaults.set(floatingCaptionDisplayMode.id, forKey: SettingsKey.floatingCaptionDisplayMode)
         defaults.set(floatingCaptionPlacement.id, forKey: SettingsKey.floatingCaptionPlacement)
@@ -1364,7 +1686,8 @@ final class TranslationSessionStore {
         defaults.set(floatingCaptionBackgroundOpacity, forKey: SettingsKey.floatingCaptionBackgroundOpacity)
         defaults.set(paragraphBreakSilenceInterval, forKey: SettingsKey.paragraphBreakSilenceInterval)
         defaults.set(savedTranscriptContentMode.id, forKey: SettingsKey.savedTranscriptContentMode)
-        defaults.set(sessionDurationMode.id, forKey: SettingsKey.sessionDurationMode)
+        defaults.set(captionScenarioMode.id, forKey: SettingsKey.captionScenarioMode)
+        defaults.set(captionResponsivenessMode.id, forKey: SettingsKey.captionResponsivenessMode)
         defaults.set(audioInputSource.id, forKey: SettingsKey.audioInputSource)
         defaults.set(selectedMicrophoneInputDeviceID, forKey: SettingsKey.selectedMicrophoneInputDeviceID)
         defaults.set(isAppleSourceAutoDetectionEnabled, forKey: SettingsKey.isAppleSourceAutoDetectionEnabled)
@@ -1376,16 +1699,18 @@ final class TranslationSessionStore {
         microphoneAudioCapture.stop()
         microphoneAudioCapture = MicrophoneAudioCapture()
         microphoneAudioCapture.delegate = self
+        stopAdvancedInterpretation()
     }
 
     private func floatingCaptionText(from text: String?) -> String {
         guard let text else { return "" }
 
-        return text.floatingCaptionTail(maxLines: floatingCaptionLineCount.rawValue)
+        return text.floatingCaptionTail(maxLines: min(2, floatingCaptionLineCount.rawValue))
     }
 
     private func loadSavedTranscripts() {
         do {
+            try migrateLegacyTranscriptsIfNeeded()
             try FileManager.default.createDirectory(
                 at: transcriptsDirectoryURL,
                 withIntermediateDirectories: true
@@ -1478,11 +1803,11 @@ final class TranslationSessionStore {
         let sourceText = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sourceText.isEmpty else { return }
 
-        activeAutosaveSourceText = sourceText
+        activeAutosaveSourceText = mergedTranscriptText(activeAutosaveSourceText, with: sourceText)
         if let translatedText {
             let translatedText = translatedText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !translatedText.isEmpty, translatedText != AppText.translating {
-                activeAutosaveTranslatedText = translatedText
+                activeAutosaveTranslatedText = mergedTranscriptText(activeAutosaveTranslatedText, with: translatedText)
             }
         }
     }
@@ -1491,7 +1816,7 @@ final class TranslationSessionStore {
     private func flushPendingTranscriptSave() -> Bool {
         let currentSourceText = visibleTranscript().trimmingCharacters(in: .whitespacesAndNewlines)
         if !currentSourceText.isEmpty {
-            activeAutosaveSourceText = currentSourceText
+            activeAutosaveSourceText = mergedTranscriptText(activeAutosaveSourceText, with: currentSourceText)
         }
 
         let sourceText = activeAutosaveSourceText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1579,6 +1904,10 @@ final class TranslationSessionStore {
     }
 
     private var transcriptsDirectoryURL: URL {
+        AppFileLocations.transcriptsDirectoryURL
+    }
+
+    private var legacyTranscriptsDirectoryURL: URL {
         let supportDirectory = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -1586,6 +1915,24 @@ final class TranslationSessionStore {
         return supportDirectory
             .appendingPathComponent(AppText.appName, isDirectory: true)
             .appendingPathComponent("Transcripts", isDirectory: true)
+    }
+
+    private func migrateLegacyTranscriptsIfNeeded() throws {
+        let fileManager = FileManager.default
+        let legacyURL = legacyTranscriptsDirectoryURL
+        let destinationURL = transcriptsDirectoryURL
+        guard fileManager.fileExists(atPath: legacyURL.path) else { return }
+
+        try fileManager.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        let legacyFiles = try fileManager.contentsOfDirectory(
+            at: legacyURL,
+            includingPropertiesForKeys: nil
+        )
+        for sourceURL in legacyFiles where sourceURL.pathExtension == "txt" {
+            let destinationFileURL = destinationURL.appendingPathComponent(sourceURL.lastPathComponent)
+            guard !fileManager.fileExists(atPath: destinationFileURL.path) else { continue }
+            try fileManager.copyItem(at: sourceURL, to: destinationFileURL)
+        }
     }
 
     private func transcriptURL(fileName: String) -> URL {
@@ -1676,6 +2023,7 @@ final class TranslationSessionStore {
         isFinal: Bool
     ) async {
         guard isRunning, !isPaused else { return }
+        guard !isSuppressingOwnSpeechOutput else { return }
         guard sourceText != lastRecognizedText || isFinal != lastRecognizedWasFinal else { return }
 
         let now = Date()
@@ -1699,7 +2047,7 @@ final class TranslationSessionStore {
         ) else {
             return
         }
-        let direction = translationDirection(recognizedLanguage: recognizedLanguage)
+        let direction = translationDirection(recognizedLanguage: recognizedLanguage, text: sourceText)
 
         let updatedSourceText = accumulatedTranscript(
             incoming: sourceText,
@@ -1718,13 +2066,31 @@ final class TranslationSessionStore {
            let index = lines.firstIndex(where: { $0.id == currentLineID }) {
             let existingLine = lines[index]
             let sourceLanguageChanged = sourceLanguageByLineID[existingLine.id] != direction.source
-            sourceLanguageByLineID[existingLine.id] = direction.source
-            guard updatedSourceText != existingLine.sourceText || sourceLanguageChanged else { return }
-            if sourceLanguageChanged, updatedSourceText == existingLine.sourceText {
-                pendingTranslationSourceText = ""
-                requestTranslation(for: existingLine, source: direction.source, target: direction.target)
+            if sourceLanguageChanged {
+                clearPendingCaptionPresentation()
+                let lineSourceText = currentPartialText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : currentPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !lineSourceText.isEmpty else { return }
+                let line = CaptionLine(
+                    sourceText: lineSourceText,
+                    translatedText: AppText.translating,
+                    createdAt: Date(),
+                    isFinal: isFinal,
+                    revision: 1,
+                    usesLongSessionDisplay: usesLongSessionMode
+                )
+                self.currentLineID = line.id
+                sourceLanguageByLineID[line.id] = direction.source
+                lines.append(line)
+                trimVisibleCaptionLinesIfNeeded()
+                lastCaptionPresentationUpdateAt = Date()
+                stageTranscriptForSave(line.sourceText)
+                requestTranslation(for: line, source: direction.source, target: direction.target)
                 return
             }
+            sourceLanguageByLineID[existingLine.id] = direction.source
+            guard updatedSourceText != existingLine.sourceText || sourceLanguageChanged else { return }
 
             if shouldPresentCaptionUpdate(sourceText: updatedSourceText, isFinal: isFinal) {
                 clearPendingCaptionPresentation()
@@ -1757,6 +2123,7 @@ final class TranslationSessionStore {
             currentLineID = line.id
             sourceLanguageByLineID[line.id] = direction.source
             lines.append(line)
+            trimVisibleCaptionLinesIfNeeded()
             lastCaptionPresentationUpdateAt = Date()
             stageTranscriptForSave(line.sourceText)
             requestTranslation(for: line, source: direction.source, target: direction.target)
@@ -2077,7 +2444,7 @@ final class TranslationSessionStore {
 
     private func commitCurrentPartial() {
         let language = currentPartialLanguage ?? sourceLanguage
-        let partial = isUsingOpenAIRealtime
+        let partial = isUsingAIRealtime
             ? currentPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
             : organizeTranscript(currentPartialText, language: language)
         guard !partial.isEmpty else { return }
@@ -2166,7 +2533,7 @@ final class TranslationSessionStore {
         floatingCommittedSourceText = line.sourceText
         floatingCurrentPartialText = ""
         pendingFloatingParagraphBreakBeforePartial = false
-        floatingPresentedSourceText = isUsingOpenAIRealtime
+        floatingPresentedSourceText = isUsingAIRealtime
             ? realtimeFloatingCaptionText(from: line.sourceText)
             : line.sourceText
         floatingQueuedSourceText = ""
@@ -2177,7 +2544,7 @@ final class TranslationSessionStore {
             floatingDisplayTranslationText = ""
             floatingDisplayTranslationSourceText = ""
         } else {
-            floatingDisplayTranslationText = isUsingOpenAIRealtime
+            floatingDisplayTranslationText = isUsingAIRealtime
                 ? realtimeFloatingCaptionText(from: translatedText)
                 : translatedText
             floatingDisplayTranslationSourceText = floatingPresentedSourceText
@@ -2200,15 +2567,7 @@ final class TranslationSessionStore {
         let normalizedPresented = normalizedTranscriptForComparison(floatingPresentedSourceText)
         guard normalizedCandidate != normalizedPresented else { return }
 
-        let now = Date()
-        if canUpdateFloatingPresentationImmediately(to: candidate, now: now)
-            || canAdvanceFloatingPresentation(now: now) {
-            presentFloatingSourceText(candidate)
-            return
-        }
-
-        floatingQueuedSourceText = candidate
-        scheduleFloatingPresentationAdvance()
+        presentFloatingSourceText(candidate)
     }
 
     private func canUpdateFloatingPresentationImmediately(to candidate: String, now: Date) -> Bool {
@@ -2246,11 +2605,6 @@ final class TranslationSessionStore {
         floatingPresentedSourceText = text
         floatingQueuedSourceText = ""
         floatingPresentedAt = Date()
-        if !floatingDisplayTranslationSourceText.isEmpty,
-           !translationSource(floatingDisplayTranslationSourceText, matches: text) {
-            floatingDisplayTranslationText = ""
-            floatingDisplayTranslationSourceText = ""
-        }
         promoteQueuedFloatingTranslationIfPossible()
     }
 
@@ -2365,7 +2719,7 @@ final class TranslationSessionStore {
         let committed = floatingCommittedSourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         let partial = floatingCurrentPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if isUsingOpenAIRealtime {
+        if isUsingAIRealtime {
             if !partial.isEmpty {
                 return realtimeFloatingCaptionText(from: partial)
             }
@@ -2385,7 +2739,7 @@ final class TranslationSessionStore {
 
     private func scheduleTranscriptCleanup() {
         guard isRunning, currentLineID != nil else { return }
-        guard !isUsingOpenAIRealtime else { return }
+        guard !isUsingAIRealtime else { return }
         guard Date().timeIntervalSince(lastRecognitionAt) > 1.5 else { return }
 
         transcriptCleanupTask?.cancel()
@@ -2396,7 +2750,7 @@ final class TranslationSessionStore {
     }
 
     private func organizeCurrentTranscript(sourceTextOverride: String? = nil) {
-        guard !isUsingOpenAIRealtime else { return }
+        guard !isUsingAIRealtime else { return }
 
         if sourceTextOverride == nil {
             flushPendingCaptionPresentation()
@@ -2638,7 +2992,8 @@ final class TranslationSessionStore {
     private func translateTranscript(
         _ text: String,
         source: LanguageOption,
-        target: LanguageOption
+        target: LanguageOption,
+        context: TranslationContext? = nil
     ) async throws -> String {
         let paragraphs = paragraphParts(from: text)
 
@@ -2652,55 +3007,35 @@ final class TranslationSessionStore {
                 .filter { !$0.isEmpty }
             var translatedSegments: [String] = []
 
-            for segment in segments {
+            for (segmentIndex, segment) in segments.enumerated() {
                 try Task.checkCancellation()
-                let cacheKey = translationCacheKey(segment: segment, source: source, target: target)
+                let segmentContext = segmentIndex == 0 ? context : nil
+                let cacheKey = translationCacheKey(segment: segment, source: source, target: target, context: segmentContext)
                 if let cachedSegment = translatedSegmentsBySource[cacheKey] {
                     rememberTranslationCacheKey(cacheKey)
                     translatedSegments.append(cachedSegment)
                     continue
                 }
 
-                let translatedSegment: String
-                switch openAITranslationModel {
-                case .customLLMAPI:
-                    translatedSegment = try await openAITranslator.translateWithChatCompletions(
-                        segment,
-                        source: source,
-                        target: target,
-                        configuration: customLLMConfiguration
-                    )
-                case .googleTranslate:
-                    translatedSegment = try await openAITranslator.translateWithGoogle(
-                        segment,
-                        source: source,
-                        target: target
-                    )
-                case .deepLFree:
-                    translatedSegment = try await openAITranslator.translateWithDeepL(
-                        segment,
-                        source: source,
-                        target: target,
-                        plan: .free
-                    )
-                case .deepLPro:
-                    translatedSegment = try await openAITranslator.translateWithDeepL(
-                        segment,
-                        source: source,
-                        target: target,
-                        plan: .pro
-                    )
-                case .off:
-                    translatedSegment = try await translator.translate(
-                        segment,
-                        source: source,
-                        target: target,
-                        model: selectedModel
-                    )
-                }
+                let translationResult = try await translateSegmentWithFallback(
+                    segment,
+                    source: source,
+                    target: target,
+                    context: segmentContext
+                )
                 try Task.checkCancellation()
-                let organizedSegment = organizeTranscript(translatedSegment, language: target)
+                let organizedSegment = organizeTranscript(translationResult.text, language: target)
                 cacheTranslatedSegment(organizedSegment, forKey: cacheKey)
+                if translationResult.model != openAITranslationModel {
+                    let fallbackCacheKey = translationCacheKey(
+                        segment: segment,
+                        source: source,
+                        target: target,
+                        context: segmentContext,
+                        model: translationResult.model
+                    )
+                    cacheTranslatedSegment(organizedSegment, forKey: fallbackCacheKey)
+                }
                 translatedSegments.append(organizedSegment)
             }
 
@@ -2710,8 +3045,154 @@ final class TranslationSessionStore {
         return translatedParagraphs.joined(separator: "\n\n")
     }
 
-    private func translationCacheKey(segment: String, source: LanguageOption, target: LanguageOption) -> String {
-        "\(source.id)\t\(target.id)\t\(selectedModel.id)\t\(segment)"
+    private func translateSegmentWithFallback(
+        _ segment: String,
+        source: LanguageOption,
+        target: LanguageOption,
+        context: TranslationContext?
+    ) async throws -> (text: String, model: AITranslationModel) {
+        let preferredModel = openAITranslationModel
+        var lastError: Error?
+
+        for model in translationFallbackModels(preferred: preferredModel) {
+            guard isTranslationModelUsable(model) else { continue }
+            let startedAt = Date()
+            do {
+                let translatedText = try await translateSegment(
+                    segment,
+                    source: source,
+                    target: target,
+                    context: context,
+                    model: model
+                )
+                let duration = Date().timeIntervalSince(startedAt)
+                lastProviderRequestDurationText = AppText.localized(
+                    english: "Last request \(String(format: "%.2f", duration))s",
+                    korean: "최근 요청 \(String(format: "%.2f", duration))초",
+                    japanese: "直近リクエスト \(String(format: "%.2f", duration))秒",
+                    chineseSimplified: "上次请求 \(String(format: "%.2f", duration)) 秒"
+                )
+                if model != preferredModel {
+                    translationRuntimeStatus = .fallback
+                    translationRuntimeDetail = "\(preferredModel.title) → \(model.title)"
+                    statusMessage = AppText.localized(
+                        english: "Translation fallback: \(preferredModel.title) → \(model.title)",
+                        korean: "번역 대체: \(preferredModel.title) → \(model.title)",
+                        japanese: "翻訳代替: \(preferredModel.title) → \(model.title)",
+                        chineseSimplified: "翻译已降级：\(preferredModel.title) → \(model.title)"
+                    )
+                } else {
+                    translationRuntimeStatus = duration > 2.5 ? .delayed : .stable
+                    translationRuntimeDetail = model.title
+                }
+                return (translatedText, model)
+            } catch {
+                lastError = error
+                translationRuntimeStatus = isRateLimitError(error) ? .rateLimited : .failed
+                translationRuntimeDetail = "\(model.title): \(error.localizedDescription)"
+            }
+        }
+
+        throw lastError ?? OpenAITranslationError.emptyOutput
+    }
+
+    private func translateSegment(
+        _ segment: String,
+        source: LanguageOption,
+        target: LanguageOption,
+        context: TranslationContext?,
+        model: AITranslationModel
+    ) async throws -> String {
+        switch model {
+        case .customLLMAPI:
+            return try await openAITranslator.translateWithChatCompletions(
+                segment,
+                source: source,
+                target: target,
+                configuration: customLLMConfiguration,
+                context: context,
+                scenarioMode: captionScenarioMode
+            )
+        case .googleTranslate:
+            return try await openAITranslator.translateWithGoogle(
+                segment,
+                source: source,
+                target: target
+            )
+        case .deepLFree:
+            return try await openAITranslator.translateWithDeepL(
+                segment,
+                source: source,
+                target: target,
+                plan: .free
+            )
+        case .deepLPro:
+            return try await openAITranslator.translateWithDeepL(
+                segment,
+                source: source,
+                target: target,
+                plan: .pro
+            )
+        case .off:
+            return try await translator.translate(
+                segment,
+                source: source,
+                target: target,
+                model: selectedModel
+            )
+        }
+    }
+
+    private func translationFallbackModels(preferred: AITranslationModel) -> [AITranslationModel] {
+        let fallbackOrder: [AITranslationModel] = [
+            preferred,
+            .googleTranslate,
+            .deepLFree,
+            .deepLPro,
+            .customLLMAPI,
+            .off
+        ]
+        var seen: Set<AITranslationModel> = []
+        return fallbackOrder.filter { seen.insert($0).inserted }
+    }
+
+    private func isTranslationModelUsable(_ model: AITranslationModel) -> Bool {
+        switch model {
+        case .customLLMAPI:
+            return hasOpenAIAPIKey && !customLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .googleTranslate:
+            return hasGoogleTranslateAPIKey
+        case .deepLFree:
+            return hasDeepLFreeAPIKey
+        case .deepLPro:
+            return hasDeepLProAPIKey
+        case .off:
+            return true
+        }
+    }
+
+    private func isRateLimitError(_ error: Error) -> Bool {
+        if case let OpenAITranslationError.requestFailed(statusCode, _) = error {
+            return statusCode == 429
+        }
+        let message = error.localizedDescription.lowercased()
+        return message.contains("429") || message.contains("rate limit") || message.contains("too many requests")
+    }
+
+    private func translationCacheKey(
+        segment: String,
+        source: LanguageOption,
+        target: LanguageOption,
+        context: TranslationContext? = nil,
+        model: AITranslationModel? = nil
+    ) -> String {
+        let contextKey: String
+        if let context, !context.isEmpty {
+            contextKey = "\(context.previousSourceText)\t\(context.previousTranslatedText)"
+        } else {
+            contextKey = ""
+        }
+        return "\(source.id)\t\(target.id)\t\(selectedModel.id)\t\(model?.id ?? openAITranslationModel.id)\t\(contextKey)\t\(segment)"
     }
 
     private func cacheTranslatedSegment(_ segment: String, forKey key: String) {
@@ -2755,7 +3236,7 @@ final class TranslationSessionStore {
         lastRecognitionAt = Date()
         transcriptCleanupTask?.cancel()
 
-        let sourceText = AppText.openAIRealtimeTranslationOnlySource
+        let sourceText = AppText.aiRealtimeTranslationOnlySource
 
         if let currentLineID,
            let index = lines.firstIndex(where: { $0.id == currentLineID }) {
@@ -2785,7 +3266,7 @@ final class TranslationSessionStore {
         }
 
         stageTranscriptForSave(sourceText, translatedText: translatedText)
-        let floatingTranslatedText = isUsingOpenAIRealtimeTranslation
+        let floatingTranslatedText = isUsingRealtimeTranslation
             ? text.trimmingCharacters(in: .whitespacesAndNewlines)
             : translatedText
         updateFloatingTranslationPresentation(floatingTranslatedText, sourceText: sourceText)
@@ -2793,7 +3274,7 @@ final class TranslationSessionStore {
     }
 
     private func requestTranslation(for line: CaptionLine, source: LanguageOption, target: LanguageOption) {
-        guard !isUsingOpenAIRealtimeTranslation else { return }
+        guard !isUsingRealtimeTranslation else { return }
 
         guard selectedModel != .appleSpeechOnly else {
             markTranslationUnavailable(
@@ -2816,6 +3297,7 @@ final class TranslationSessionStore {
         let sourceText = line.sourceText
         guard pendingTranslationSourceText != sourceText else { return }
         let translationSourceText = translationSourceText(for: sourceText, language: source)
+        let context = translationContext(for: sourceText)
         pendingTranslationSourceText = sourceText
         if latestTranslationRequest == nil {
             translationBurstStartedAt = Date()
@@ -2825,8 +3307,17 @@ final class TranslationSessionStore {
             sourceText: sourceText,
             translationSourceText: translationSourceText,
             source: source,
-            target: target
+            target: target,
+            context: context
         )
+
+        if !activeTranslationRequestSourceText.isEmpty,
+           activeTranslationRequestSourceText != sourceText,
+           shouldCancelStaleTranslationRequest(activeSourceText: activeTranslationRequestSourceText, nextSourceText: sourceText) {
+            translationTask?.cancel()
+            translationTask = nil
+            activeTranslationRequestSourceText = ""
+        }
 
         guard translationTask == nil else {
             return
@@ -2840,6 +3331,7 @@ final class TranslationSessionStore {
     private func processPendingTranslationRequests() async {
         while !Task.isCancelled, let request = latestTranslationRequest {
             latestTranslationRequest = nil
+            activeTranslationRequestSourceText = request.sourceText
 
             do {
                 let delay = translationDebounceDelay(for: request.sourceText)
@@ -2855,14 +3347,24 @@ final class TranslationSessionStore {
                 let translatedText = try await translateTranscript(
                     request.translationSourceText,
                     source: request.source,
-                    target: request.target
+                    target: request.target,
+                    context: request.context
                 )
                 try Task.checkCancellation()
                 updateTranslation(translatedText, for: request.line, matching: request.sourceText)
+                if activeTranslationRequestSourceText == request.sourceText {
+                    activeTranslationRequestSourceText = ""
+                }
             } catch is CancellationError {
+                if activeTranslationRequestSourceText == request.sourceText {
+                    activeTranslationRequestSourceText = ""
+                }
                 translationTask = nil
                 return
             } catch {
+                if activeTranslationRequestSourceText == request.sourceText {
+                    activeTranslationRequestSourceText = ""
+                }
                 if pendingTranslationSourceText == request.sourceText {
                     pendingTranslationSourceText = ""
                 }
@@ -2871,14 +3373,42 @@ final class TranslationSessionStore {
         }
 
         translationTask = nil
+        activeTranslationRequestSourceText = ""
     }
 
     private func translationSourceText(for sourceText: String, language: LanguageOption) -> String {
-        guard usesLongSessionMode, !isUsingOpenAIRealtime else { return sourceText }
+        guard usesLongSessionMode, !isUsingAIRealtime else { return sourceText }
 
         let organizedSourceText = organizeTranscript(sourceText, language: language)
         guard !organizedSourceText.isEmpty else { return sourceText }
         return organizedSourceText
+    }
+
+    private func translationContext(for sourceText: String) -> TranslationContext? {
+        let previousSourceText = lastCompletedTranslationSourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousTranslatedText = lastCompletedTranslationText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !previousSourceText.isEmpty, !previousTranslatedText.isEmpty else { return nil }
+
+        let normalizedPrevious = normalizedTranscriptForComparison(previousSourceText)
+        let normalizedCurrent = normalizedTranscriptForComparison(sourceText)
+        guard normalizedPrevious != normalizedCurrent,
+              !isWholeTextPrefix(normalizedPrevious, of: normalizedCurrent)
+        else {
+            return nil
+        }
+
+        return TranslationContext(
+            previousSourceText: recentTranslationContextText(from: previousSourceText),
+            previousTranslatedText: recentTranslationContextText(from: previousTranslatedText)
+        )
+    }
+
+    private func recentTranslationContextText(from text: String) -> String {
+        let units = transcriptUnits(from: text)
+        if let lastUnit = units.last?.text.trimmingCharacters(in: .whitespacesAndNewlines), !lastUnit.isEmpty {
+            return String(lastUnit.suffix(220))
+        }
+        return String(text.trimmingCharacters(in: .whitespacesAndNewlines).suffix(220))
     }
 
     private func translationDebounceDelay(for sourceText: String) -> Int {
@@ -2892,9 +3422,37 @@ final class TranslationSessionStore {
             }
         }
 
-        guard translationBurstStartedAt != .distantPast else { return 45 }
+        let immediateCharacterCount = Int(
+            Double(captionScenarioMode.liveCueImmediateCharacterCount)
+                * captionResponsivenessMode.immediateCharacterMultiplier
+        )
+        let mergeDelay = Int(
+            Double(captionScenarioMode.liveCueMergeDelayMilliseconds)
+                * captionResponsivenessMode.mergeDelayMultiplier
+        )
+
+        if sourceText.utf16.count >= immediateCharacterCount
+            || sourceText.hasLikelyCaptionBoundary {
+            return 0
+        }
+
+        guard translationBurstStartedAt != .distantPast else { return mergeDelay }
         let burstAge = Date().timeIntervalSince(translationBurstStartedAt)
-        return burstAge >= 0.45 ? 0 : 70
+        return burstAge >= 0.55 ? 0 : mergeDelay
+    }
+
+    private func shouldCancelStaleTranslationRequest(activeSourceText: String, nextSourceText: String) -> Bool {
+        let active = normalizedTranscriptForComparison(activeSourceText)
+        let next = normalizedTranscriptForComparison(nextSourceText)
+        guard !active.isEmpty, !next.isEmpty else { return false }
+
+        if isWholeTextPrefix(active, of: next) || isWholeTextPrefix(next, of: active) {
+            return true
+        }
+
+        let activeTail = active.suffix(80)
+        let nextTail = next.suffix(80)
+        return activeTail != nextTail
     }
 
     private func updateTranslation(_ translatedText: String, for line: CaptionLine, matching sourceText: String) {
@@ -2923,8 +3481,62 @@ final class TranslationSessionStore {
             usesLongSessionDisplay: usesLongSessionMode
         )
 
+        rememberCompletedTranslation(sourceText: sourceText, translatedText: organizedTranslatedText)
         updateFloatingTranslationPresentation(floatingTranslatedText, sourceText: sourceText)
         speakTranslatedDeltaIfNeeded(organizedTranslatedText)
+    }
+
+    private func rememberCompletedTranslation(sourceText: String, translatedText: String) {
+        let sourceText = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let translatedText = translatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sourceText.isEmpty,
+              !translatedText.isEmpty,
+              translatedText != AppText.translating
+        else {
+            return
+        }
+
+        lastCompletedTranslationSourceText = sourceText
+        lastCompletedTranslationText = translatedText
+    }
+
+    private func trimVisibleCaptionLinesIfNeeded() {
+        guard lines.count > Self.maximumVisibleCaptionLines else { return }
+
+        let trimCount = min(Self.visibleCaptionLineTrimBatch, lines.count - Self.maximumVisibleCaptionLines)
+        guard trimCount > 0 else { return }
+
+        let removedLines = lines.prefix(trimCount)
+        let removedSourceText = removedLines.map(\.sourceText).joined(separator: "\n")
+        let removedTranslatedText = removedLines.compactMap { line -> String? in
+            let translatedText = line.translatedText
+            guard !translatedText.isEmpty,
+                  translatedText != AppText.translating
+            else { return nil }
+            return translatedText
+        }
+        .joined(separator: "\n")
+
+        activeAutosaveSourceText = mergedTranscriptText(activeAutosaveSourceText, with: removedSourceText)
+        activeAutosaveTranslatedText = mergedTranscriptText(activeAutosaveTranslatedText, with: removedTranslatedText)
+        for line in removedLines {
+            sourceLanguageByLineID.removeValue(forKey: line.id)
+        }
+        lines.removeFirst(trimCount)
+    }
+
+    private func mergedTranscriptText(_ existingText: String, with newText: String) -> String {
+        let existingText = existingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newText = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !existingText.isEmpty else { return newText }
+        guard !newText.isEmpty else { return existingText }
+        if existingText == newText || existingText.hasSuffix(newText) {
+            return existingText
+        }
+        if newText.hasPrefix(existingText) {
+            return newText
+        }
+        return existingText + "\n" + newText
     }
 
     private func markTranslationUnavailable(_ message: String, for line: CaptionLine, matching sourceText: String) {
@@ -2956,10 +3568,10 @@ final class TranslationSessionStore {
     }
 
     private func updateFloatingTranslationPresentation(_ translatedText: String, sourceText: String) {
-        let displaySourceText = isUsingOpenAIRealtime
+        let displaySourceText = isUsingAIRealtime
             ? realtimeFloatingCaptionText(from: sourceText)
             : sourceText
-        let displayTranslatedText = isUsingOpenAIRealtime
+        let displayTranslatedText = isUsingAIRealtime
             ? realtimeFloatingCaptionText(from: translatedText)
             : translatedText
 
@@ -2971,14 +3583,10 @@ final class TranslationSessionStore {
         }
 
         if shouldUpdateFloatingTranslationDisplay(for: displaySourceText) {
-            if floatingDisplayTranslationText.isEmpty || canAdvanceFloatingPresentation() {
-                floatingDisplayTranslationText = displayTranslatedText
-                floatingDisplayTranslationSourceText = displaySourceText
-            } else {
-                floatingQueuedTranslationText = displayTranslatedText
-                floatingQueuedTranslationSourceText = displaySourceText
-                scheduleFloatingPresentationAdvance()
-            }
+            floatingDisplayTranslationText = displayTranslatedText
+            floatingDisplayTranslationSourceText = displaySourceText
+            floatingQueuedTranslationText = ""
+            floatingQueuedTranslationSourceText = ""
             return
         }
 
@@ -3007,6 +3615,7 @@ final class TranslationSessionStore {
 
     private func shouldUpdateFloatingTranslationDisplay(for sourceText: String) -> Bool {
         translationSource(sourceText, matches: floatingPresentedSourceText)
+            || translationSource(floatingPresentedSourceText, matches: sourceText)
     }
 
     private func shouldUpdateQueuedFloatingTranslationDisplay(for sourceText: String) -> Bool {
@@ -3033,18 +3642,244 @@ final class TranslationSessionStore {
             || isWholeTextPrefix(normalizedSourceText, of: normalizedOrganizedDisplaySourceText)
     }
 
-    private func translationDirection(recognizedLanguage: LanguageOption) -> (source: LanguageOption, target: LanguageOption) {
-        (isUsingAppleSourceAutoDetection ? recognizedLanguage : sourceLanguage, targetLanguage)
+    private func translationDirection(recognizedLanguage: LanguageOption, text: String) -> (source: LanguageOption, target: LanguageOption) {
+        guard isAdvancedInterpretationEnabled else {
+            return (sourceLanguage, targetLanguage)
+        }
+
+        let detectedLanguage = detectedConfiguredLanguage(for: text) ?? (isUsingAppleSourceAutoDetection ? recognizedLanguage : sourceLanguage)
+        if sameLanguageFamily(detectedLanguage, targetLanguage) {
+            return (targetLanguage, sourceLanguage)
+        }
+        return (sourceLanguage, targetLanguage)
+    }
+
+    private func detectedConfiguredLanguage(for text: String) -> LanguageOption? {
+        let detectedFamily = detectedLanguageFamily(in: text)
+        if detectedFamily == languageFamily(sourceLanguage) {
+            return sourceLanguage
+        }
+        if detectedFamily == languageFamily(targetLanguage) {
+            return targetLanguage
+        }
+        return nil
+    }
+
+    private func sameLanguageFamily(_ lhs: LanguageOption, _ rhs: LanguageOption) -> Bool {
+        languageFamily(lhs) == languageFamily(rhs)
+    }
+
+    private func languageFamily(_ language: LanguageOption) -> String {
+        String(language.id.split(separator: "-").first ?? "").lowercased()
+    }
+
+    private func detectedLanguageFamily(in text: String) -> String? {
+        var latin = 0
+        var han = 0
+        var hiraganaKatakana = 0
+        var cyrillic = 0
+        var arabic = 0
+
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x0041...0x005A, 0x0061...0x007A:
+                latin += 1
+            case 0x4E00...0x9FFF, 0x3400...0x4DBF:
+                han += 1
+            case 0x3040...0x30FF, 0x31F0...0x31FF:
+                hiraganaKatakana += 1
+            case 0x0400...0x04FF, 0x0500...0x052F:
+                cyrillic += 1
+            case 0x0600...0x06FF, 0x0750...0x077F, 0x08A0...0x08FF:
+                arabic += 1
+            default:
+                continue
+            }
+        }
+
+        let scriptCounts = [
+            ("en", latin),
+            ("zh", han),
+            ("ja", hiraganaKatakana > 0 ? hiraganaKatakana + han : 0),
+            ("ru", cyrillic),
+            ("ar", arabic),
+            ("fa", arabic)
+        ]
+        guard let strongest = scriptCounts.max(by: { $0.1 < $1.1 }),
+              strongest.1 > 0
+        else {
+            return nil
+        }
+        return strongest.0
+    }
+
+    private func handleInterpretationMicrophoneSpeech(_ text: String, recognizedLanguage: LanguageOption) async {
+        guard isRunning, isAdvancedInterpretationEnabled, !isPaused else { return }
+        guard !isSuppressingOwnSpeechOutput else { return }
+        let sourceText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sourceText.isEmpty, sourceText != lastRecognizedInterpretationText else { return }
+        lastRecognizedInterpretationText = sourceText
+        let direction = translationDirection(recognizedLanguage: recognizedLanguage, text: sourceText)
+
+        do {
+            let translatedText = try await translateSegmentWithFallback(
+                sourceText,
+                source: direction.source,
+                target: direction.target,
+                context: nil
+            ).text
+            let readyText = speechReadyText(translatedText)
+            guard let delta = speechDelta(previous: lastSpokenInterpretationText, current: readyText),
+                  let unspokenDelta = unspokenSpeechText(from: delta)
+            else {
+                return
+            }
+            lastSpokenInterpretationText = readyText
+            speakInterpretation(unspokenDelta, language: direction.target)
+        } catch {
+            statusMessage = AppText.localized(
+                english: "Reverse interpretation failed: \(error.localizedDescription)",
+                korean: "역방향 통역 실패: \(error.localizedDescription)",
+                japanese: "逆方向通訳失敗: \(error.localizedDescription)",
+                chineseSimplified: "反向同传失败：\(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func enqueueBidirectionalRecognitionCandidate(
+        text: String,
+        language: LanguageOption,
+        confidence: Double
+    ) {
+        guard !isSuppressingOwnSpeechOutput else { return }
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+
+        bidirectionalRecognitionCandidates.append(
+            BidirectionalRecognitionCandidate(
+                text: trimmedText,
+                language: language,
+                confidence: confidence,
+                receivedAt: Date()
+            )
+        )
+        bidirectionalRecognitionCandidates = Array(bidirectionalRecognitionCandidates.suffix(8))
+
+        bidirectionalRecognitionTask?.cancel()
+        bidirectionalRecognitionTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(320))
+            flushBidirectionalRecognitionCandidates()
+        }
+    }
+
+    private func flushBidirectionalRecognitionCandidates() {
+        guard !bidirectionalRecognitionCandidates.isEmpty else { return }
+        let candidates = bidirectionalRecognitionCandidates
+        bidirectionalRecognitionCandidates.removeAll()
+        bidirectionalRecognitionTask = nil
+
+        guard let selected = candidates.max(by: { recognitionScore($0) < recognitionScore($1) }) else { return }
+        transcriptionRuntimeStatus = .stable
+        transcriptionRuntimeDetail = "Deepgram \(selected.language.localizedTitle)"
+        Task { @MainActor in
+            await appendCaption(
+                sourceText: selected.text,
+                recognizedLanguage: selected.language,
+                confidence: selected.confidence,
+                isFinal: false
+            )
+        }
+    }
+
+    private func recognitionScore(_ candidate: BidirectionalRecognitionCandidate) -> Double {
+        var score = candidate.confidence
+        let detectedFamily = detectedLanguageFamily(in: candidate.text)
+        let candidateFamily = languageFamily(candidate.language)
+        if detectedFamily == candidateFamily {
+            score += 0.45
+        } else if detectedFamily != nil {
+            score -= 0.45
+        }
+
+        let compactText = candidate.text.replacingOccurrences(of: #"\s+"#, with: "", options: .regularExpression)
+        let latinCount = compactText.unicodeScalars.filter {
+            (0x0041...0x005A).contains($0.value) || (0x0061...0x007A).contains($0.value)
+        }.count
+        let hanCount = compactText.unicodeScalars.filter {
+            (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value)
+        }.count
+        let cyrillicCount = compactText.unicodeScalars.filter {
+            (0x0400...0x04FF).contains($0.value) || (0x0500...0x052F).contains($0.value)
+        }.count
+
+        if candidateFamily == "en" {
+            if latinCount >= 3 {
+                score += 0.15
+            }
+            if hanCount > latinCount {
+                score -= 0.6
+            }
+        }
+        if candidateFamily == "zh" {
+            if hanCount <= 2, compactText.count <= 4 {
+                score -= 0.25
+            }
+            if latinCount >= max(3, hanCount) {
+                score -= 0.85
+            }
+        }
+        if candidateFamily == "ru", latinCount > cyrillicCount {
+            score -= 0.7
+        }
+        return score
     }
 
     private func speak(_ text: String) {
         guard !text.isEmpty else { return }
-        speechOutput.speak(text, language: targetLanguage)
+        suppressOwnSpeechOutput(for: text)
+        if isAdvancedInterpretationEnabled {
+            speakInterpretation(text, language: targetLanguage)
+        } else {
+            speechOutput.speak(text, language: targetLanguage)
+        }
+    }
+
+    private func speakInterpretation(_ text: String, language: LanguageOption) {
+        guard !text.isEmpty else { return }
+        suppressOwnSpeechOutput(for: text)
+        speechOutputRuntimeDetail = deepgramSpeechOutput.preferredEngineDescription(for: language)
+        deepgramSpeechOutput.speak(text, language: language) { [weak self] engineDescription in
+            self?.speechOutputRuntimeDetail = engineDescription
+            self?.suppressOwnSpeechOutput(for: text)
+        }
+    }
+
+    private var isSuppressingOwnSpeechOutput: Bool {
+        Date() < ownSpeechOutputSuppressedUntil
+    }
+
+    private func suppressOwnSpeechOutput(for text: String) {
+        let characterCount = text.trimmingCharacters(in: .whitespacesAndNewlines).count
+        let estimatedSeconds = min(7.0, max(1.2, Double(characterCount) / 9.0))
+        ownSpeechOutputSuppressedUntil = max(
+            ownSpeechOutputSuppressedUntil,
+            Date().addingTimeInterval(estimatedSeconds + 0.55)
+        )
+    }
+
+    private func currentSpeechOutputRuntimeDetail() -> String {
+        guard isAdvancedInterpretationEnabled, isDubbingEnabled else {
+            return AppText.localized(english: "Voice output off", korean: "음성 출력 꺼짐", japanese: "音声出力オフ", chineseSimplified: "语音输出关闭")
+        }
+        return [
+            deepgramSpeechOutput.preferredEngineDescription(for: targetLanguage),
+            deepgramSpeechOutput.preferredEngineDescription(for: sourceLanguage)
+        ].joined(separator: " / ")
     }
 
     private func speakTranslatedDeltaIfNeeded(_ translatedText: String) {
-        guard isRunning, isDubbingEnabled else { return }
-        guard !isUsingOpenAIRealtimeTranslation else { return }
+        guard isRunning, isAdvancedInterpretationEnabled, isDubbingEnabled else { return }
+        guard !isUsingRealtimeTranslation else { return }
 
         let currentText = speechReadyText(translatedText)
         guard !currentText.isEmpty else { return }
@@ -3204,7 +4039,8 @@ final class TranslationSessionStore {
 
     private func stopSpeaking() {
         speechOutput.stop()
-        openAIRealtimeAudioOutput.stop()
+        deepgramSpeechOutput.stop()
+        realtimeAudioOutput.stop()
     }
 }
 
@@ -3212,8 +4048,9 @@ extension TranslationSessionStore: SystemAudioCaptureDelegate {
     nonisolated func systemAudioCapture(_ capture: SystemAudioCapture, didOutput sampleBuffer: CMSampleBuffer) {
         transcriber.append(sampleBuffer)
         speechCaptioner.append(sampleBuffer)
-        openAITranscriber.append(sampleBuffer)
+        aiRealtimeTranscriber.append(sampleBuffer)
         deepgramTranscriber.append(sampleBuffer)
+        deepgramTargetTranscriber.append(sampleBuffer)
     }
 
     nonisolated func systemAudioCapture(_ capture: SystemAudioCapture, didReceiveAudioSampleCount count: Int, level: Float?) {
@@ -3257,9 +4094,14 @@ extension TranslationSessionStore: SystemAudioCaptureDelegate {
 
 extension TranslationSessionStore: MicrophoneAudioCaptureDelegate {
     nonisolated func microphoneAudioCapture(_ capture: MicrophoneAudioCapture, didOutput sampleBuffer: CMSampleBuffer) {
+        if capture === interpretationMicrophoneCapture {
+            interpretationTranscriber.append(sampleBuffer)
+            interpretationSpeechCaptioner.append(sampleBuffer)
+            return
+        }
         transcriber.append(sampleBuffer)
         speechCaptioner.append(sampleBuffer)
-        openAITranscriber.append(sampleBuffer)
+        aiRealtimeTranscriber.append(sampleBuffer)
         deepgramTranscriber.append(sampleBuffer)
     }
 
@@ -3269,6 +4111,9 @@ extension TranslationSessionStore: MicrophoneAudioCaptureDelegate {
         level: Float?
     ) {
         Task { @MainActor in
+            if capture === interpretationMicrophoneCapture {
+                return
+            }
             audioSampleCount = count
             latestAudioLevel = level
             guard !isPaused else {
@@ -3293,6 +4138,23 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
         confidence: Double
     ) {
         Task { @MainActor in
+            if transcriber === interpretationTranscriber {
+                await handleInterpretationMicrophoneSpeech(text, recognizedLanguage: language)
+                return
+            }
+            if isAdvancedInterpretationEnabled,
+               (transcriber === deepgramTranscriber.delegateToken || transcriber === deepgramTargetTranscriber.delegateToken) {
+                enqueueBidirectionalRecognitionCandidate(
+                    text: text,
+                    language: language,
+                    confidence: confidence
+                )
+                return
+            }
+            transcriptionRuntimeStatus = .stable
+            if openAITranscriptionModel == .deepgramStreaming {
+                transcriptionRuntimeDetail = "Deepgram"
+            }
             await appendCaption(
                 sourceText: text,
                 recognizedLanguage: language,
@@ -3321,18 +4183,59 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
         Task { @MainActor in
                   guard isRunning,
                   !isPaused,
+                  isAdvancedInterpretationEnabled,
                   isDubbingEnabled,
-                  isUsingOpenAIRealtimeTranslation
+                  isUsingRealtimeTranslation
             else {
                 return
             }
 
-            openAIRealtimeAudioOutput.playPCM16Base64(audio, sampleRate: sampleRate)
+            realtimeAudioOutput.playPCM16Base64(audio, sampleRate: sampleRate)
+        }
+    }
+
+    nonisolated func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didUpdateStatus message: String) {
+        Task { @MainActor in
+            if message.localizedCaseInsensitiveContains("Deepgram") {
+                if message.localizedCaseInsensitiveContains("reconnecting")
+                    || message.contains("重连")
+                    || message.contains("再接続")
+                    || message.contains("재연결") {
+                    transcriptionRuntimeStatus = .reconnecting
+                    transcriptionRuntimeDetail = message
+                } else if message.localizedCaseInsensitiveContains("connected")
+                    || message.contains("已连接")
+                    || message.contains("接続済")
+                    || message.contains("연결") {
+                    transcriptionRuntimeStatus = .stable
+                    transcriptionRuntimeDetail = "Deepgram"
+                }
+            }
+            statusMessage = message
         }
     }
 
     nonisolated func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didFail error: Error) {
         Task { @MainActor in
+            if isRunning, openAITranscriptionModel == .deepgramStreaming {
+                deepgramTranscriber.stop()
+                transcriptionRuntimeStatus = .fallback
+                transcriptionRuntimeDetail = AppText.localized(
+                    english: "Deepgram disconnected, using Apple Speech",
+                    korean: "Deepgram 연결 끊김, Apple Speech 사용",
+                    japanese: "Deepgram切断、Apple Speechを使用",
+                    chineseSimplified: "Deepgram 已断开，已切到 Apple Speech"
+                )
+                statusMessage = transcriptionRuntimeDetail
+                do {
+                    try await startAppleSpeechCaptioner()
+                } catch {
+                    transcriptionRuntimeStatus = .failed
+                    transcriptionRuntimeDetail = error.localizedDescription
+                    statusMessage = error.localizedDescription
+                }
+                return
+            }
             statusMessage = error.localizedDescription
         }
     }
@@ -3341,6 +4244,12 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
 extension TranslationSessionStore: SpeechCaptionerDelegate {
     nonisolated func speechCaptioner(_ captioner: SpeechCaptioner, didRecognize text: String, isFinal: Bool) {
         Task { @MainActor in
+            if captioner === interpretationSpeechCaptioner {
+                await handleInterpretationMicrophoneSpeech(text, recognizedLanguage: targetLanguage)
+                return
+            }
+            transcriptionRuntimeStatus = .stable
+            transcriptionRuntimeDetail = AppText.localized(english: "Apple Speech", korean: "Apple Speech", japanese: "Apple Speech", chineseSimplified: "Apple Speech")
             await appendCaption(
                 sourceText: text,
                 recognizedLanguage: sourceLanguage,
@@ -3352,7 +4261,26 @@ extension TranslationSessionStore: SpeechCaptionerDelegate {
 
     nonisolated func speechCaptioner(_ captioner: SpeechCaptioner, didFail error: Error) {
         Task { @MainActor in
+            if captioner === interpretationSpeechCaptioner {
+                statusMessage = AppText.localized(
+                    english: "Advanced interpretation microphone failed: \(error.localizedDescription)",
+                    korean: "고급 통역 마이크 실패: \(error.localizedDescription)",
+                    japanese: "高度同時通訳マイク失敗: \(error.localizedDescription)",
+                    chineseSimplified: "高级同传麦克风失败：\(error.localizedDescription)"
+                )
+                return
+            }
+            transcriptionRuntimeStatus = .failed
+            transcriptionRuntimeDetail = error.localizedDescription
             statusMessage = error.localizedDescription
         }
+    }
+}
+
+private extension String {
+    var hasLikelyCaptionBoundary: Bool {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return false }
+        return ".!?。！？؟".contains(last)
     }
 }

@@ -21,6 +21,13 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
         shared.close()
     }
 
+    static func applyPlacement(_ placement: FloatingCaptionPlacement, session: TranslationSessionStore) {
+        session.floatingCaptionPlacement = placement
+        if isOpen {
+            shared.reposition(session: session)
+        }
+    }
+
     private static let shared = FloatingCaptionWindowController()
 
     private var window: NSPanel?
@@ -45,6 +52,15 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
         notifyVisibilityChanged()
     }
 
+    private func reposition(session: TranslationSessionStore) {
+        guard let panel = window else { return }
+        panel.contentView = NSHostingView(rootView: FloatingCaptionWindowView(session: session))
+        configure(panel, placement: session.floatingCaptionPlacement)
+        panel.setContentSize(defaultSize(for: session.floatingCaptionPlacement))
+        positionForFirstOpen(panel, placement: session.floatingCaptionPlacement)
+        panel.orderFrontRegardless()
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === window else { return }
         window = nil
@@ -52,9 +68,7 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow(session: TranslationSessionStore) -> NSPanel {
-        let size: NSSize = session.floatingCaptionPlacement == .notchIsland
-            ? NSSize(width: 520, height: 96)
-            : NSSize(width: 720, height: 170)
+        let size = defaultSize(for: session.floatingCaptionPlacement)
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -92,10 +106,33 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
         case .lowerThird:
             let visibleFrame = screen.visibleFrame
             y = visibleFrame.minY + min(180, visibleFrame.height * 0.18)
+        case .topCenter:
+            let visibleFrame = screen.visibleFrame
+            y = visibleFrame.maxY - frame.height - 14
+        case .lowerFifth:
+            let visibleFrame = screen.visibleFrame
+            y = visibleFrame.minY + visibleFrame.height * 0.2
         case .notchIsland:
-            y = screen.frame.maxY - frame.height - 6
+            if screen.safeAreaInsets.top > 0 {
+                y = screen.frame.maxY - frame.height - 4
+            } else {
+                y = screen.visibleFrame.maxY - frame.height - 8
+            }
         }
         panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func defaultSize(for placement: FloatingCaptionPlacement) -> NSSize {
+        switch placement {
+        case .notchIsland:
+            NSSize(width: 520, height: 96)
+        case .topCenter:
+            NSSize(width: 760, height: 150)
+        case .lowerFifth:
+            NSSize(width: 820, height: 170)
+        case .lowerThird:
+            NSSize(width: 720, height: 170)
+        }
     }
 
     private func closeOrphanFloatingWindows() {

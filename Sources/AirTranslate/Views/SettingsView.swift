@@ -36,18 +36,6 @@ struct SettingsView: View {
             }
 
             Section(AppText.transcript) {
-                Picker(AppText.sessionLength, selection: $session.sessionDurationMode) {
-                    ForEach(SessionDurationMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-                .disabled(session.isRunning)
-
-                Text(session.sessionDurationMode.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
                 Stepper(
                     value: $session.paragraphBreakSilenceInterval,
                     in: 1...15,

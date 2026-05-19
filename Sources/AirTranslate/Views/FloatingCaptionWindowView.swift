@@ -16,8 +16,6 @@ struct FloatingCaptionWindowView: View {
             .background {
                 RoundedRectangle(cornerRadius: capsuleCornerRadius, style: .continuous)
                     .fill(backgroundColor.opacity(session.floatingCaptionBackgroundOpacity))
-                    .shadow(color: .black.opacity(session.floatingCaptionPlacement == .notchIsland ? 0.42 : 0.32), radius: 18, x: 0, y: 8)
-                    .shadow(color: .black.opacity(0.22), radius: 4, x: 0, y: 1)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: capsuleCornerRadius, style: .continuous)
@@ -84,7 +82,7 @@ struct FloatingCaptionWindowView: View {
     }
 
     private var lineLimit: Int {
-        session.floatingCaptionLineCount.rawValue
+        min(2, session.floatingCaptionLineCount.rawValue)
     }
 
     private var preferredHeight: CGFloat {
@@ -108,7 +106,7 @@ struct FloatingCaptionWindowView: View {
 
     private var windowWidth: (minimum: CGFloat, ideal: CGFloat, maximum: CGFloat) {
         switch session.floatingCaptionPlacement {
-        case .lowerThird:
+        case .lowerThird, .topCenter, .lowerFifth:
             (420, 760, 1080)
         case .notchIsland:
             (280, 520, 680)
@@ -117,16 +115,16 @@ struct FloatingCaptionWindowView: View {
 
     private var effectiveLineLimit: Int {
         switch session.floatingCaptionPlacement {
-        case .lowerThird:
-            lineLimit
+        case .lowerThird, .topCenter, .lowerFifth:
+            min(2, lineLimit)
         case .notchIsland:
-            min(lineLimit, session.floatingCaptionDisplayMode == .originalAndTranslation ? 2 : 3)
+            min(2, lineLimit)
         }
     }
 
     private var primaryFont: Font {
         switch session.floatingCaptionPlacement {
-        case .lowerThird:
+        case .lowerThird, .topCenter, .lowerFifth:
             session.floatingCaptionTextSize.primaryFont(style: session.floatingCaptionFontStyle)
         case .notchIsland:
             .system(size: notchPrimaryPointSize, weight: .semibold, design: session.floatingCaptionFontStyle.design)
@@ -135,7 +133,7 @@ struct FloatingCaptionWindowView: View {
 
     private var secondaryFont: Font {
         switch session.floatingCaptionPlacement {
-        case .lowerThird:
+        case .lowerThird, .topCenter, .lowerFifth:
             session.floatingCaptionTextSize.secondaryFont(style: session.floatingCaptionFontStyle)
         case .notchIsland:
             .system(size: notchSecondaryPointSize, weight: .medium, design: session.floatingCaptionFontStyle.design)

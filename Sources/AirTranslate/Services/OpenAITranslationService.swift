@@ -1,16 +1,18 @@
 import Foundation
 
-actor OpenAITranslationService {
+actor OpenAITranslationService: TranslationProvider {
     private let endpoint = URL(string: "https://api.openai.com/v1/responses")!
     private let googleTranslateEndpoint = URL(string: "https://translation.googleapis.com/language/translate/v2")!
     private let deepLFreeEndpoint = URL(string: "https://api-free.deepl.com/v2/translate")!
     private let deepLProEndpoint = URL(string: "https://api.deepl.com/v2/translate")!
+    private var lastProviderRequestAt = Date.distantPast
+    private let minimumProviderRequestInterval: TimeInterval = 0.18
 
     func translate(
         _ text: String,
         source: LanguageOption,
         target: LanguageOption,
-        model selectedModel: OpenAIRealtimeTranslationModel
+        model selectedModel: AITranslationModel
     ) async throws -> String {
         guard !text.isEmpty else { return text }
         guard selectedModel.isEnabled else { return text }
@@ -18,20 +20,14 @@ actor OpenAITranslationService {
             throw OpenAITranslationError.missingAPIKey
         }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(
-            OpenAIResponseRequest(
-                model: selectedModel.textFallbackModelID,
-                instructions: AppText.openAITranslationInstructions(
-                    source: source.localizedTitle,
-                    target: target.localizedTitle
-                ),
-                input: text,
-                store: false
-            )
+        await throttleProviderRequest()
+
+        let request = try Self.makeOpenAIResponseRequest(
+            apiKey: apiKey,
+            text: text,
+            source: source,
+            target: target,
+            model: selectedModel.textFallbackModelID
         )
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -48,13 +44,15 @@ actor OpenAITranslationService {
         _ text: String,
         source: LanguageOption,
         target: LanguageOption,
-        configuration: CustomLLMAPIConfiguration
+        configuration: CustomLLMAPIConfiguration,
+        context: TranslationContext? = nil,
+        scenarioMode: CaptionScenarioMode = .standard
     ) async throws -> String {
         guard !text.isEmpty else { return text }
         guard let apiKey = try OpenAIAPIKeyStore.readAPIKey(), !apiKey.isEmpty else {
             throw OpenAITranslationError.missingAPIKey
         }
-        guard let endpoint = configuration.chatCompletionsURL else {
+        guard configuration.chatCompletionsURL != nil else {
             throw OpenAITranslationError.invalidEndpoint
         }
         let model = configuration.model.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -62,31 +60,16 @@ actor OpenAITranslationService {
             throw OpenAITranslationError.missingModel
         }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        if endpoint.host?.contains("openrouter.ai") == true {
-            request.setValue("https://github.com/himomohi/AirTranslate", forHTTPHeaderField: "HTTP-Referer")
-            request.setValue(AppText.appName, forHTTPHeaderField: "X-OpenRouter-Title")
-        } else {
-            request.setValue(AppText.appName, forHTTPHeaderField: "X-Title")
-        }
-        request.httpBody = try JSONEncoder().encode(
-            OpenAIChatCompletionRequest(
-                model: model,
-                messages: [
-                    .init(
-                        role: "system",
-                        content: AppText.openAITranslationInstructions(
-                            source: source.localizedTitle,
-                            target: target.localizedTitle
-                        )
-                    ),
-                    .init(role: "user", content: text)
-                ],
-                temperature: 0.2
-            )
+        await throttleProviderRequest()
+
+        let request = try Self.makeChatCompletionsRequest(
+            apiKey: apiKey,
+            text: text,
+            source: source,
+            target: target,
+            configuration: configuration,
+            context: context,
+            scenarioMode: scenarioMode
         )
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -108,24 +91,13 @@ actor OpenAITranslationService {
         guard let apiKey = try GoogleTranslateAPIKeyStore.readAPIKey(), !apiKey.isEmpty else {
             throw OpenAITranslationError.missingGoogleAPIKey
         }
-        guard var components = URLComponents(url: googleTranslateEndpoint, resolvingAgainstBaseURL: false) else {
-            throw OpenAITranslationError.invalidEndpoint
-        }
-        components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-        guard let url = components.url else {
-            throw OpenAITranslationError.invalidEndpoint
-        }
+        await throttleProviderRequest()
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(
-            GoogleTranslateRequest(
-                q: text,
-                source: source.googleTranslateCode,
-                target: target.googleTranslateCode,
-                format: "text"
-            )
+        let request = try Self.makeGoogleTranslateRequest(
+            apiKey: apiKey,
+            text: text,
+            source: source,
+            target: target
         )
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -156,15 +128,15 @@ actor OpenAITranslationService {
             throw OpenAITranslationError.missingDeepLAPIKey
         }
 
-        var request = URLRequest(url: plan == .free ? deepLFreeEndpoint : deepLProEndpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("DeepL-Auth-Key \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.httpBody = [
-            URLQueryItem(name: "text", value: text),
-            URLQueryItem(name: "source_lang", value: source.deepLLanguageCode),
-            URLQueryItem(name: "target_lang", value: target.deepLLanguageCode)
-        ].formURLEncodedData()
+        await throttleProviderRequest()
+
+        let request = try Self.makeDeepLTranslateRequest(
+            apiKey: apiKey,
+            text: text,
+            source: source,
+            target: target,
+            plan: plan
+        )
 
         let (data, response) = try await URLSession.shared.data(for: request)
         try validateHTTPResponse(response, data: data)
@@ -176,8 +148,139 @@ actor OpenAITranslationService {
         return outputText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    nonisolated static func makeOpenAIResponseRequest(
+        apiKey: String,
+        text: String,
+        source: LanguageOption,
+        target: LanguageOption,
+        model: String,
+        context: TranslationContext? = nil,
+        scenarioMode: CaptionScenarioMode = .standard
+    ) throws -> URLRequest {
+        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(
+            OpenAIResponseRequest(
+                model: model,
+                instructions: AppText.openAITranslationInstructions(source: source.localizedTitle, target: target.localizedTitle, scenarioMode: scenarioMode),
+                input: Self.translationInput(text: text, context: context),
+                store: false
+            )
+        )
+        return request
+    }
+
+    nonisolated static func makeChatCompletionsRequest(
+        apiKey: String,
+        text: String,
+        source: LanguageOption,
+        target: LanguageOption,
+        configuration: CustomLLMAPIConfiguration,
+        context: TranslationContext? = nil,
+        scenarioMode: CaptionScenarioMode = .standard
+    ) throws -> URLRequest {
+        guard let endpoint = configuration.chatCompletionsURL else {
+            throw OpenAITranslationError.invalidEndpoint
+        }
+        let model = configuration.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else {
+            throw OpenAITranslationError.missingModel
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if endpoint.host?.contains("openrouter.ai") == true {
+            request.setValue("https://github.com/himomohi/AirTranslate", forHTTPHeaderField: "HTTP-Referer")
+            request.setValue(AppText.appName, forHTTPHeaderField: "X-OpenRouter-Title")
+        } else {
+            request.setValue(AppText.appName, forHTTPHeaderField: "X-Title")
+        }
+        request.httpBody = try JSONEncoder().encode(
+            OpenAIChatCompletionRequest(
+                model: model,
+                messages: [
+                    .init(role: "system", content: AppText.openAITranslationInstructions(source: source.localizedTitle, target: target.localizedTitle, scenarioMode: scenarioMode)),
+                    .init(role: "user", content: Self.translationInput(text: text, context: context))
+                ],
+                temperature: 0.2
+            )
+        )
+        return request
+    }
+
+    nonisolated private static func translationInput(text: String, context: TranslationContext?) -> String {
+        guard let context, !context.isEmpty else { return text }
+
+        return """
+        Previous source:
+        \(context.previousSourceText)
+
+        Previous translation:
+        \(context.previousTranslatedText)
+
+        Current source to translate:
+        \(text)
+
+        Return only the translation for the current source.
+        """
+    }
+
+    nonisolated static func makeGoogleTranslateRequest(
+        apiKey: String,
+        text: String,
+        source: LanguageOption,
+        target: LanguageOption
+    ) throws -> URLRequest {
+        guard var components = URLComponents(string: "https://translation.googleapis.com/language/translate/v2") else {
+            throw OpenAITranslationError.invalidEndpoint
+        }
+        components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        guard let url = components.url else {
+            throw OpenAITranslationError.invalidEndpoint
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            GoogleTranslateRequest(q: text, source: source.googleTranslateCode, target: target.googleTranslateCode, format: "text")
+        )
+        return request
+    }
+
+    nonisolated static func makeDeepLTranslateRequest(
+        apiKey: String,
+        text: String,
+        source: LanguageOption,
+        target: LanguageOption,
+        plan: DeepLPlan
+    ) throws -> URLRequest {
+        var request = URLRequest(url: plan == .free ? URL(string: "https://api-free.deepl.com/v2/translate")! : URL(string: "https://api.deepl.com/v2/translate")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("DeepL-Auth-Key \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = [
+            URLQueryItem(name: "text", value: text),
+            URLQueryItem(name: "source_lang", value: source.deepLLanguageCode),
+            URLQueryItem(name: "target_lang", value: target.deepLLanguageCode)
+        ].formURLEncodedData()
+        return request
+    }
+
+    private func throttleProviderRequest() async {
+        let elapsed = Date().timeIntervalSince(lastProviderRequestAt)
+        if elapsed < minimumProviderRequestInterval {
+            try? await Task.sleep(for: .milliseconds(Int((minimumProviderRequestInterval - elapsed) * 1_000)))
+        }
+        lastProviderRequestAt = Date()
+    }
+
     func testConnection(
-        translationModel: OpenAIRealtimeTranslationModel,
+        translationModel: AITranslationModel,
         configuration: CustomLLMAPIConfiguration
     ) async throws {
         let output: String
@@ -253,6 +356,16 @@ struct CustomLLMAPIConfiguration: Equatable {
 
         let normalizedBaseURL = trimmedBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return URL(string: "\(normalizedBaseURL)/chat/completions")
+    }
+}
+
+struct TranslationContext: Equatable {
+    let previousSourceText: String
+    let previousTranslatedText: String
+
+    var isEmpty: Bool {
+        previousSourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || previousTranslatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

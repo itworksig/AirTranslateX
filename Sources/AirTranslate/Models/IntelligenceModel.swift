@@ -73,11 +73,11 @@ enum IntelligenceModel: String, CaseIterable, Identifiable {
     }
 }
 
-enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
+enum AITranscriptionModel: String, CaseIterable, Identifiable {
     case off
     case deepgramStreaming = "deepgram-streaming"
 
-    static var allCases: [OpenAIRealtimeTranscriptionModel] {
+    static var allCases: [AITranscriptionModel] {
         [.off, .deepgramStreaming]
     }
 
@@ -97,14 +97,14 @@ enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
     }
 }
 
-enum OpenAIRealtimeTranslationModel: String, CaseIterable, Identifiable {
+enum AITranslationModel: String, CaseIterable, Identifiable {
     case off
     case customLLMAPI = "custom-llm-api"
     case googleTranslate = "google-translate"
     case deepLFree = "deepl-free"
     case deepLPro = "deepl-pro"
 
-    static var allCases: [OpenAIRealtimeTranslationModel] {
+    static var allCases: [AITranslationModel] {
         [.off, .customLLMAPI, .googleTranslate, .deepLFree, .deepLPro]
     }
 

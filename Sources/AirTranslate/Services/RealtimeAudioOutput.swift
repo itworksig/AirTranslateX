@@ -1,11 +1,11 @@
 import AVFAudio
 import Foundation
 
-final class OpenAIRealtimeAudioOutput: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "AirTranslate.OpenAIRealtimeAudioOutput")
+final class RealtimeAudioOutput: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "AirTranslate.RealtimeAudioOutput")
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
-    private let translatedVoiceGain: Float = 1.6
+    private let translatedVoiceGain: Float = 2.8
     private var format: AVAudioFormat?
     private var isConfigured = false
 
@@ -13,7 +13,15 @@ final class OpenAIRealtimeAudioOutput: @unchecked Sendable {
         guard let data = Data(base64Encoded: audio), !data.isEmpty else { return }
 
         queue.async { [weak self] in
-            self?.playPCM16Data(data, sampleRate: sampleRate)
+            self?.playPCM16DataNow(data, sampleRate: sampleRate)
+        }
+    }
+
+    func playPCM16Data(_ data: Data, sampleRate: Double) {
+        guard !data.isEmpty else { return }
+
+        queue.async { [weak self] in
+            self?.playPCM16DataNow(data, sampleRate: sampleRate)
         }
     }
 
@@ -25,7 +33,7 @@ final class OpenAIRealtimeAudioOutput: @unchecked Sendable {
         }
     }
 
-    private func playPCM16Data(_ data: Data, sampleRate: Double) {
+    private func playPCM16DataNow(_ data: Data, sampleRate: Double) {
         let sampleCount = data.count / MemoryLayout<Int16>.size
         guard sampleCount > 0,
               let format = configuredFormat(sampleRate: sampleRate),

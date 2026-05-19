@@ -7,7 +7,7 @@ struct ContentView: View {
         ZStack(alignment: .top) {
             NavigationSplitView {
                 SidebarView(session: session)
-                    .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 300)
+                    .navigationSplitViewColumnWidth(min: 300, ideal: 330, max: 380)
             } detail: {
                 CaptionBoardView(session: session)
             }

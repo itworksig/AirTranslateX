@@ -2,7 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
-final class OpenAIRealtimeTranscriber: @unchecked Sendable {
+final class AIRealtimeTranscriber: @unchecked Sendable {
     private static let realtimeAudioSampleRate = 24_000
     private static let maxAudioChunkMilliseconds = 80
     private static let bytesPerPCM16Sample = 2
@@ -27,7 +27,7 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     private var isPaused = false
     private var realtimeTranscriptText = ""
 
-    func start(language: LanguageOption, model: OpenAIRealtimeTranscriptionModel) async throws {
+    func start(language: LanguageOption, model: AITranscriptionModel) async throws {
         try await start(
             language: language,
             modelID: model.rawValue,
@@ -36,7 +36,7 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         )
     }
 
-    func startRealtimeTranslationOnly(language: LanguageOption, model: OpenAIRealtimeTranslationModel) async throws {
+    func startRealtimeTranslationOnly(language: LanguageOption, model: AITranslationModel) async throws {
         try await start(
             language: language,
             modelID: model.apiModelID,
@@ -96,7 +96,7 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         conversionLock.unlock()
 
         for audio in audioChunks {
-            let event = OpenAIRealtimeAudioAppendEvent(
+            let event = RealtimeAudioAppendEvent(
                 type: audioAppendEventType,
                 audio: audio
             )
@@ -129,28 +129,28 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         let data: Data
         switch outputMode {
         case .transcription:
-            let event = OpenAIRealtimeTranscriptionSessionUpdateEvent(
-                session: OpenAIRealtimeTranscriptionSession(
+            let event = RealtimeTranscriptionSessionUpdateEvent(
+                session: RealtimeTranscriptionSession(
                     type: "transcription",
-                    audio: OpenAIRealtimeTranscriptionAudio(
-                        input: OpenAIRealtimeTranscriptionAudioInput(
-                            format: OpenAIRealtimeAudioFormat(type: "audio/pcm", rate: Self.realtimeAudioSampleRate),
-                            transcription: OpenAIRealtimeTranscriptionConfig(
+                    audio: RealtimeTranscriptionAudio(
+                        input: RealtimeTranscriptionAudioInput(
+                            format: RealtimeAudioFormat(type: "audio/pcm", rate: Self.realtimeAudioSampleRate),
+                            transcription: RealtimeTranscriptionConfig(
                                 model: modelID,
                                 language: language.openAILanguageCode
                             ),
                             turnDetection: .lowLatencyServerVAD,
-                            noiseReduction: OpenAIRealtimeNoiseReduction(type: "near_field")
+                            noiseReduction: RealtimeNoiseReduction(type: "near_field")
                         )
                     )
                 )
             )
             data = try JSONEncoder().encode(event)
         case .translationOnly:
-            let event = OpenAIRealtimeTranslationSessionUpdateEvent(
-                session: OpenAIRealtimeTranslationSession(
-                    audio: OpenAIRealtimeTranslationAudio(
-                        output: OpenAIRealtimeTranslationAudioOutput(
+            let event = RealtimeTranslationSessionUpdateEvent(
+                session: RealtimeTranslationSession(
+                    audio: RealtimeTranslationAudio(
+                        output: RealtimeTranslationAudioOutput(
                             language: language.openAILanguageCode
                         )
                     )
@@ -192,7 +192,7 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
 
     private func handleEventText(_ text: String) {
         guard let data = text.data(using: .utf8),
-              let event = try? JSONDecoder().decode(OpenAIRealtimeTranscriptionEvent.self, from: data)
+              let event = try? JSONDecoder().decode(RealtimeTranscriptionEvent.self, from: data)
         else { return }
 
         switch event.type {
@@ -224,7 +224,7 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
                 sampleRate: Double(Self.realtimeAudioSampleRate)
             )
         case "error":
-            delegate?.liveSpeechTranscriber(proxyTranscriber, didFail: OpenAIRealtimeTranscriberError.server(event.error?.message))
+            delegate?.liveSpeechTranscriber(proxyTranscriber, didFail: AIRealtimeTranscriberError.server(event.error?.message))
         default:
             return
         }
@@ -338,30 +338,30 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     }
 }
 
-private struct OpenAIRealtimeTranscriptionSessionUpdateEvent: Encodable {
+private struct RealtimeTranscriptionSessionUpdateEvent: Encodable {
     let type = "session.update"
-    let session: OpenAIRealtimeTranscriptionSession
+    let session: RealtimeTranscriptionSession
 }
 
-private struct OpenAIRealtimeTranslationSessionUpdateEvent: Encodable {
+private struct RealtimeTranslationSessionUpdateEvent: Encodable {
     let type = "session.update"
-    let session: OpenAIRealtimeTranslationSession
+    let session: RealtimeTranslationSession
 }
 
-private struct OpenAIRealtimeTranscriptionSession: Encodable {
+private struct RealtimeTranscriptionSession: Encodable {
     let type: String
-    let audio: OpenAIRealtimeTranscriptionAudio
+    let audio: RealtimeTranscriptionAudio
 }
 
-private struct OpenAIRealtimeTranscriptionAudio: Encodable {
-    let input: OpenAIRealtimeTranscriptionAudioInput
+private struct RealtimeTranscriptionAudio: Encodable {
+    let input: RealtimeTranscriptionAudioInput
 }
 
-private struct OpenAIRealtimeTranscriptionAudioInput: Encodable {
-    let format: OpenAIRealtimeAudioFormat
-    let transcription: OpenAIRealtimeTranscriptionConfig
-    let turnDetection: OpenAIRealtimeTurnDetection
-    let noiseReduction: OpenAIRealtimeNoiseReduction
+private struct RealtimeTranscriptionAudioInput: Encodable {
+    let format: RealtimeAudioFormat
+    let transcription: RealtimeTranscriptionConfig
+    let turnDetection: RealtimeTurnDetection
+    let noiseReduction: RealtimeNoiseReduction
 
     private enum CodingKeys: String, CodingKey {
         case format
@@ -371,35 +371,35 @@ private struct OpenAIRealtimeTranscriptionAudioInput: Encodable {
     }
 }
 
-private struct OpenAIRealtimeAudioFormat: Encodable {
+private struct RealtimeAudioFormat: Encodable {
     let type: String
     let rate: Int
 }
 
-private struct OpenAIRealtimeTranslationSession: Encodable {
-    let audio: OpenAIRealtimeTranslationAudio
+private struct RealtimeTranslationSession: Encodable {
+    let audio: RealtimeTranslationAudio
 }
 
-private struct OpenAIRealtimeTranslationAudio: Encodable {
-    let output: OpenAIRealtimeTranslationAudioOutput
+private struct RealtimeTranslationAudio: Encodable {
+    let output: RealtimeTranslationAudioOutput
 }
 
-private struct OpenAIRealtimeTranslationAudioOutput: Encodable {
+private struct RealtimeTranslationAudioOutput: Encodable {
     let language: String
 }
 
-private struct OpenAIRealtimeTranscriptionConfig: Encodable {
+private struct RealtimeTranscriptionConfig: Encodable {
     let model: String
     let language: String
 }
 
-private struct OpenAIRealtimeTurnDetection: Encodable {
+private struct RealtimeTurnDetection: Encodable {
     let type: String
     let threshold: Double?
     let prefixPaddingMilliseconds: Int?
     let silenceDurationMilliseconds: Int?
 
-    static let lowLatencyServerVAD = OpenAIRealtimeTurnDetection(
+    static let lowLatencyServerVAD = RealtimeTurnDetection(
         type: "server_vad",
         threshold: 0.42,
         prefixPaddingMilliseconds: 120,
@@ -426,27 +426,27 @@ private struct OpenAIRealtimeTurnDetection: Encodable {
     }
 }
 
-private struct OpenAIRealtimeNoiseReduction: Encodable {
+private struct RealtimeNoiseReduction: Encodable {
     let type: String
 }
 
-private struct OpenAIRealtimeAudioAppendEvent: Encodable {
+private struct RealtimeAudioAppendEvent: Encodable {
     let type: String
     let audio: String
 }
 
-private struct OpenAIRealtimeTranscriptionEvent: Decodable {
+private struct RealtimeTranscriptionEvent: Decodable {
     let type: String
     let delta: String?
     let transcript: String?
-    let error: OpenAIRealtimeErrorBody?
+    let error: RealtimeErrorBody?
 }
 
-private struct OpenAIRealtimeErrorBody: Decodable {
+private struct RealtimeErrorBody: Decodable {
     let message: String?
 }
 
-private enum OpenAIRealtimeTranscriberError: LocalizedError {
+private enum AIRealtimeTranscriberError: LocalizedError {
     case server(String?)
 
     var errorDescription: String? {
@@ -457,7 +457,7 @@ private enum OpenAIRealtimeTranscriberError: LocalizedError {
     }
 }
 
-private extension OpenAIRealtimeTranscriber.OutputMode {
+private extension AIRealtimeTranscriber.OutputMode {
     var audioAppendEventType: String {
         switch self {
         case .transcription:

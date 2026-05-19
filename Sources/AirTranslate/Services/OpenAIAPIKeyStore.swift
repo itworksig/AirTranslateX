@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 enum OpenAIAPIKeyStore {
     private static let storage = APIKeychainStorage(service: "AirTranslateX.OpenAI", account: "OPENAI_API_KEY")
@@ -50,6 +49,15 @@ enum GoogleTranslateAPIKeyStore {
     static func deleteAPIKey() throws { try storage.deleteAPIKey() }
 }
 
+enum GoogleTTSAPIKeyStore {
+    private static let storage = APIKeychainStorage(service: "AirTranslateX.GoogleTTS", account: "GOOGLE_TTS_API_KEY")
+
+    static func hasAPIKey() -> Bool { storage.hasAPIKey() }
+    static func readAPIKey() throws -> String? { try storage.readAPIKey() }
+    static func saveAPIKey(_ key: String) throws { try storage.saveAPIKey(key) }
+    static func deleteAPIKey() throws { try storage.deleteAPIKey() }
+}
+
 enum DeepLFreeAPIKeyStore {
     private static let storage = APIKeychainStorage(service: "AirTranslateX.DeepLFree", account: "DEEPL_FREE_API_KEY")
 
@@ -80,8 +88,7 @@ private struct APIKeychainStorage {
             return !cachedKey.isEmpty
         }
 
-        let status = SecItemCopyMatching(baseQuery() as CFDictionary, nil)
-        return status == errSecSuccess
+        return (try? APIConfigFileStorage.readValue(for: account))?.isEmpty == false
     }
 
     func readAPIKey() throws -> String? {
@@ -92,21 +99,8 @@ private struct APIKeychainStorage {
             return cachedKey
         }
 
-        var query = baseQuery()
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound {
+        guard let key = try APIConfigFileStorage.readValue(for: account) else {
             return nil
-        }
-        guard status == errSecSuccess else {
-            throw OpenAIAPIKeyStoreError.keychainStatus(status)
-        }
-        guard let data = item as? Data,
-              let key = String(data: data, encoding: .utf8) else {
-            throw OpenAIAPIKeyStoreError.invalidStoredKey
         }
         guard !isMaskedPlaceholder(key) else {
             throw OpenAIAPIKeyStoreError.maskedPlaceholder
@@ -123,37 +117,14 @@ private struct APIKeychainStorage {
         guard !isMaskedPlaceholder(trimmedKey) else {
             throw OpenAIAPIKeyStoreError.maskedPlaceholder
         }
-        guard let data = trimmedKey.data(using: .utf8) else {
-            throw OpenAIAPIKeyStoreError.invalidStoredKey
-        }
 
-        SecItemDelete(baseQuery() as CFDictionary)
-
-        var query = baseQuery()
-        query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw OpenAIAPIKeyStoreError.keychainStatus(status)
-        }
+        try APIConfigFileStorage.writeValue(trimmedKey, for: account)
         APIKeyCache.write(trimmedKey, service: service, account: account)
     }
 
     func deleteAPIKey() throws {
-        let status = SecItemDelete(baseQuery() as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw OpenAIAPIKeyStoreError.keychainStatus(status)
-        }
+        try APIConfigFileStorage.deleteValue(for: account)
         APIKeyCache.remove(service: service, account: account)
-    }
-
-    private func baseQuery() -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
     }
 
     private func isMaskedPlaceholder(_ key: String) -> Bool {
@@ -196,11 +167,135 @@ private enum APIKeyCache {
     }
 }
 
+private enum APIConfigFileStorage {
+    private static let sectionName = "api"
+
+    static var configDirectoryURL: URL {
+        AppFileLocations.appDocumentsDirectoryURL
+    }
+
+    static var configFileURL: URL {
+        AppFileLocations.configFileURL
+    }
+
+    static func readValue(for account: String) throws -> String? {
+        let values = try readValues()
+        guard let key = configKey(for: account),
+              let value = values[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty
+        else {
+            return nil
+        }
+        return value
+    }
+
+    static func writeValue(_ value: String, for account: String) throws {
+        guard let key = configKey(for: account) else {
+            throw OpenAIAPIKeyStoreError.invalidStoredKey
+        }
+
+        var values = try readValues()
+        values[key] = value
+        try writeValues(values)
+    }
+
+    static func deleteValue(for account: String) throws {
+        guard let key = configKey(for: account) else { return }
+
+        var values = try readValues()
+        values.removeValue(forKey: key)
+        try writeValues(values)
+    }
+
+    private static func configKey(for account: String) -> String? {
+        switch account {
+        case "OPENAI_API_KEY":
+            "openai_api_key"
+        case "DEEPGRAM_API_KEY":
+            "deepgram_api_key"
+        case "GOOGLE_TRANSLATE_API_KEY":
+            "google_translate_api_key"
+        case "GOOGLE_TTS_API_KEY":
+            "google_tts_api_key"
+        case "DEEPL_FREE_API_KEY":
+            "deepl_free_api_key"
+        case "DEEPL_PRO_API_KEY":
+            "deepl_pro_api_key"
+        default:
+            nil
+        }
+    }
+
+    private static func readValues() throws -> [String: String] {
+        let url = configFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            try ensureConfigFileExists()
+            return [:]
+        }
+
+        let content = try String(contentsOf: url, encoding: .utf8)
+        var isAPISection = false
+        var values: [String: String] = [:]
+
+        for rawLine in content.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, !line.hasPrefix("#"), !line.hasPrefix(";") else { continue }
+
+            if line.hasPrefix("["), line.hasSuffix("]") {
+                isAPISection = line.dropFirst().dropLast().trimmingCharacters(in: .whitespacesAndNewlines) == sectionName
+                continue
+            }
+
+            guard isAPISection,
+                  let separatorIndex = line.firstIndex(of: "=")
+            else {
+                continue
+            }
+
+            let key = line[..<separatorIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = line[line.index(after: separatorIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            values[key] = value
+        }
+
+        return values
+    }
+
+    private static func writeValues(_ values: [String: String]) throws {
+        try FileManager.default.createDirectory(at: configDirectoryURL, withIntermediateDirectories: true)
+
+        let orderedKeys = [
+            "openai_api_key",
+            "deepgram_api_key",
+            "google_translate_api_key",
+            "google_tts_api_key",
+            "deepl_free_api_key",
+            "deepl_pro_api_key"
+        ]
+        var lines = [
+            "# AirTranslateX config",
+            "# File: \(configFileURL.path)",
+            "# Plain text API keys. Keep this file private.",
+            "",
+            "[api]"
+        ]
+        for key in orderedKeys {
+            lines.append("\(key)=\(values[key] ?? "")")
+        }
+        lines.append("")
+
+        try lines.joined(separator: "\n").write(to: configFileURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func ensureConfigFileExists() throws {
+        try writeValues([:])
+    }
+}
+
 enum OpenAIAPIKeyStoreError: LocalizedError {
     case emptyKey
     case invalidStoredKey
     case maskedPlaceholder
-    case keychainStatus(OSStatus)
+    case configFileFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -210,8 +305,8 @@ enum OpenAIAPIKeyStoreError: LocalizedError {
             AppText.openAIAPIKeyInvalidStoredValue
         case .maskedPlaceholder:
             AppText.openAIAPIKeyMaskedPlaceholder
-        case let .keychainStatus(status):
-            AppText.openAIAPIKeychainFailed(status)
+        case let .configFileFailed(message):
+            message
         }
     }
 }

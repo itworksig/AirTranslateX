@@ -169,8 +169,10 @@ enum AppText {
     )
     static let openAIAPIKey = localized(english: "OpenAI API Key", korean: "OpenAI API 키")
     static let openAIAPIKeyDescription = localized(
-        english: "Enter your API key in the app. AirTranslate stores it in macOS Keychain and uses it only for OpenAI translation.",
-        korean: "앱에서 API 키를 입력하세요. AirTranslate는 키를 macOS Keychain에 저장하고 OpenAI 번역에만 사용합니다."
+        english: "Enter your API key in the app. AirTranslate stores it in Documents/AirTranslateX/config.ini.",
+        korean: "앱에서 API 키를 입력하세요. AirTranslate는 Documents/AirTranslateX/config.ini에 저장합니다.",
+        japanese: "アプリでAPIキーを入力してください。AirTranslateはDocuments/AirTranslateX/config.iniに保存します。",
+        chineseSimplified: "在应用中输入 API key。AirTranslate 会保存到 Documents/AirTranslateX/config.ini。"
     )
     static let openAIAPIKeyPlaceholder = localized(
         english: "Paste API key",
@@ -194,8 +196,10 @@ enum AppText {
     static let removeOpenAIAPIKey = localized(english: "Remove API Key", korean: "API 키 삭제", japanese: "APIキーを削除", chineseSimplified: "删除 API key")
     static let testOpenAIAPIKey = localized(english: "Test API Key", korean: "API 키 테스트", japanese: "APIキーをテスト", chineseSimplified: "测试 API key")
     static let openAIAPIKeySaved = localized(
-        english: "OpenAI API key saved in Keychain.",
-        korean: "OpenAI API 키가 Keychain에 저장되었습니다."
+        english: "OpenAI API key saved in config.ini.",
+        korean: "OpenAI API 키가 config.ini에 저장되었습니다.",
+        japanese: "OpenAI APIキーをconfig.iniに保存しました。",
+        chineseSimplified: "OpenAI API key 已保存到 config.ini。"
     )
     static let openAIAPIKeyRemoved = localized(
         english: "OpenAI API key removed.",
@@ -257,8 +261,10 @@ enum AppText {
     static let removeDeepgramAPIKey = localized(english: "Remove Deepgram API Key", korean: "Deepgram API 키 삭제", japanese: "Deepgram APIキーを削除", chineseSimplified: "删除 Deepgram API key")
     static let testDeepgramAPIKey = localized(english: "Test Deepgram API Key", korean: "Deepgram API 키 테스트", japanese: "Deepgram APIキーをテスト", chineseSimplified: "测试 Deepgram API key")
     static let deepgramAPIKeySaved = localized(
-        english: "Deepgram API key saved in Keychain.",
-        korean: "Deepgram API 키가 Keychain에 저장되었습니다."
+        english: "Deepgram API key saved in config.ini.",
+        korean: "Deepgram API 키가 config.ini에 저장되었습니다.",
+        japanese: "Deepgram APIキーをconfig.iniに保存しました。",
+        chineseSimplified: "Deepgram API key 已保存到 config.ini。"
     )
     static let deepgramAPIKeyRemoved = localized(
         english: "Deepgram API key removed.",
@@ -412,7 +418,7 @@ enum AppText {
         japanese: "OpenAI API Platformを開く",
         chineseSimplified: "打开 OpenAI API 平台"
     )
-    static let openAIRealtimeTranslationOnlySource = localized(
+    static let aiRealtimeTranslationOnlySource = localized(
         english: "OpenAI realtime translation",
         korean: "OpenAI 실시간 번역"
     )
@@ -473,17 +479,6 @@ enum AppText {
     static let paragraphBreakSilenceDescription = localized(
         english: "When speech resumes after this much silence, the transcript starts a new paragraph.",
         korean: "이 시간만큼 말이 멈춘 뒤 다시 시작되면 기록을 새 문단으로 나눕니다."
-    )
-    static let sessionLength = localized(english: "Session Length", korean: "세션 길이", japanese: "セッション長", chineseSimplified: "会话时长")
-    static let sessionLengthStandard = localized(english: "Standard", korean: "일반", japanese: "標準", chineseSimplified: "标准")
-    static let sessionLengthThirtyMinutesOrMore = localized(english: "30+ minutes", korean: "30분 이상", japanese: "30分以上", chineseSimplified: "30 分钟以上")
-    static let sessionLengthStandardDescription = localized(
-        english: "Keeps live updates as immediate as possible for short sessions.",
-        korean: "짧은 세션에서 실시간 반응성을 최대한 유지합니다."
-    )
-    static let sessionLengthThirtyMinutesOrMoreDescription = localized(
-        english: "Uses long-session safeguards: less frequent full-text UI updates, delayed translation bursts, and tail rendering for very long transcripts.",
-        korean: "긴 세션 보호 모드를 사용합니다. 전체 텍스트 화면 갱신과 번역 폭주를 줄이고, 아주 긴 기록은 최근 부분만 렌더링합니다."
     )
     static let savedTranscripts = localized(english: "Saved Transcripts", korean: "저장된 기록", japanese: "保存済み記録", chineseSimplified: "已保存记录")
     static let savedTranscriptContent = localized(
@@ -736,15 +731,19 @@ enum AppText {
 
     static func openAIModelAvailabilityDetail(hasAPIKey: Bool) -> String {
         localized(
-            english: hasAPIKey ? "OpenAI API key is saved in Keychain." : "Save an OpenAI API key in Settings.",
-            korean: hasAPIKey ? "OpenAI API 키가 Keychain에 저장되어 있습니다." : "설정에서 OpenAI API 키를 저장하세요."
+            english: hasAPIKey ? "OpenAI API key is saved in config.ini." : "Save an OpenAI API key in Settings or config.ini.",
+            korean: hasAPIKey ? "OpenAI API 키가 config.ini에 저장되어 있습니다." : "설정 또는 config.ini에 OpenAI API 키를 저장하세요.",
+            japanese: hasAPIKey ? "OpenAI APIキーはconfig.iniに保存されています。" : "設定またはconfig.iniにOpenAI APIキーを保存してください。",
+            chineseSimplified: hasAPIKey ? "OpenAI API key 已保存在 config.ini。" : "请在设置或 config.ini 中保存 OpenAI API key。"
         )
     }
 
-    static func openAITranslationInstructions(source: String, target: String) -> String {
+    static func openAITranslationInstructions(source: String, target: String, scenarioMode: CaptionScenarioMode = .standard) -> String {
         localized(
-            english: "Translate from \(source) to \(target). Return only the translated text. Preserve paragraph breaks and line breaks.",
-            korean: "\(source)에서 \(target)로 번역하세요. 번역문만 반환하고 문단과 줄바꿈은 유지하세요."
+            english: "Translate live captions from \(source) to \(target). Return only the translated subtitle text. Keep it concise and natural for simultaneous interpretation. Preserve the current meaning even if the sentence is incomplete. Prefer one or two short subtitle lines, and avoid explanations, labels, quotation marks, or markdown. Scenario: \(scenarioMode.subtitleStyleHint)",
+            korean: "\(source)에서 \(target)로 실시간 자막을 번역하세요. 번역 자막 텍스트만 반환하세요. 동시통역처럼 간결하고 자연스럽게 쓰고, 문장이 미완성이어도 현재 의미를 유지하세요. 가능하면 짧은 한두 줄 자막으로 만들고 설명, 라벨, 따옴표, 마크다운은 쓰지 마세요. 장면: \(scenarioMode.subtitleStyleHint)",
+            japanese: "\(source)から\(target)へライブ字幕として翻訳してください。翻訳字幕のみを返してください。同時通訳向けに簡潔で自然にし、文が未完成でも現在の意味を保ってください。短い1〜2行の字幕を優先し、説明、ラベル、引用符、Markdownは使わないでください。シーン: \(scenarioMode.subtitleStyleHint)",
+            chineseSimplified: "把 \(source) 实时字幕翻译成 \(target)。只返回翻译后的字幕文本。按同声传译风格处理，简洁、自然，句子未完成时也保留当前语义。优先输出一到两行短字幕，不要解释、标签、引号或 Markdown。场景：\(scenarioMode.subtitleStyleHint)"
         )
     }
 
@@ -807,6 +806,20 @@ enum AppText {
             korean: "\(provider) 테스트 실패: \(message)",
             japanese: "\(provider) テスト失敗: \(message)",
             chineseSimplified: "\(provider) 测试失败：\(message)"
+        )
+    }
+    static let deepgramConnectedStatus = localized(
+        english: "Deepgram connected.",
+        korean: "Deepgram 연결됨.",
+        japanese: "Deepgram接続済み。",
+        chineseSimplified: "Deepgram 已连接。"
+    )
+    static func deepgramReconnectingStatus(attempt: Int) -> String {
+        localized(
+            english: "Deepgram reconnecting... (\(attempt)/5)",
+            korean: "Deepgram 재연결 중... (\(attempt)/5)",
+            japanese: "Deepgram再接続中... (\(attempt)/5)",
+            chineseSimplified: "Deepgram 正在重连...（\(attempt)/5）"
         )
     }
     static let deepgramAPIConnectionTesting = localized(

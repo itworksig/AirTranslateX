@@ -18,6 +18,9 @@ struct CaptionBoardView: View {
                 },
                 showFloatingCaptions: {
                     toggleFloatingCaptions()
+                },
+                clearTranscript: {
+                    session.clearCurrentTranscript()
                 }
             )
 
@@ -62,6 +65,7 @@ private struct CaptionBoardHeader: View {
     let toggleCapture: () -> Void
     let togglePause: () -> Void
     let showFloatingCaptions: () -> Void
+    let clearTranscript: () -> Void
 
     var body: some View {
         SessionOverviewCard(
@@ -73,7 +77,8 @@ private struct CaptionBoardHeader: View {
             isFloatingCaptionVisible: isFloatingCaptionVisible,
             toggleCapture: toggleCapture,
             togglePause: togglePause,
-            showFloatingCaptions: showFloatingCaptions
+            showFloatingCaptions: showFloatingCaptions,
+            clearTranscript: clearTranscript
         )
     }
 }
@@ -118,7 +123,12 @@ private struct CaptionTranscriptFeed: View {
                     }
 
                     ForEach(session.lines) { line in
-                        CaptionLineView(line: line)
+                        CaptionLineView(
+                            line: line,
+                            deleteLine: {
+                                session.deleteCaptionLine(id: line.id)
+                            }
+                        )
                             .id(line.id)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -164,6 +174,7 @@ private struct CaptionTranscriptFeed: View {
 
 private struct CaptionLineView: View {
     let line: CaptionLine
+    let deleteLine: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
@@ -175,6 +186,7 @@ private struct CaptionLineView: View {
                 revision: line.revision,
                 isPrimary: true
             )
+
             TranscriptPane(
                 title: AppText.translation,
                 description: AppText.translationDescription,
@@ -184,7 +196,145 @@ private struct CaptionLineView: View {
                 isPrimary: false
             )
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topTrailing) {
+            Button(role: .destructive) {
+                deleteLine()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .background(Color(nsColor: .textBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08))
+                    }
+            }
+            .buttonStyle(TranscriptPaneCopyButtonStyle())
+            .padding(10)
+            .help(AppText.localized(
+                english: "Delete this caption pair",
+                korean: "이 자막 쌍 삭제",
+                japanese: "この字幕ペアを削除",
+                chineseSimplified: "删除这组字幕"
+            ))
+        }
+    }
+}
+
+private struct ChatBubbleRow: View {
+    let title: String
+    let text: String
+    let displayText: String
+    let revision: Int
+    let alignment: HorizontalAlignment
+    let tint: Color
+    let deleteLine: () -> Void
+    @State private var isExpanded = true
+    @State private var isCopyFeedbackVisible = false
+    @State private var copyFeedbackToken = 0
+
+    var body: some View {
+        HStack {
+            if alignment == .trailing {
+                Spacer(minLength: 80)
+            }
+
+            VStack(alignment: alignment, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Button {
+                        withAnimation(.snappy(duration: 0.18)) {
+                            isExpanded.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.bold))
+                            .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        if copyText() {
+                            showCopyFeedback()
+                        }
+                    } label: {
+                        Image(systemName: isCopyFeedbackVisible ? "checkmark" : "doc.on.doc")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(isCopyFeedbackVisible ? Color.green : Color.secondary)
+                    .disabled(!canCopy)
+
+                    Button(role: .destructive) {
+                        deleteLine()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+
+                if isExpanded {
+                    Text(displayText)
+                        .font(.system(size: 18, weight: alignment == .trailing ? .semibold : .regular))
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(alignment == .trailing ? .trailing : .leading)
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .id(revision)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: 720, alignment: alignment == .trailing ? .trailing : .leading)
+            .background(tint, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06))
+            }
+
+            if alignment == .leading {
+                Spacer(minLength: 80)
+            }
+        }
+    }
+
+    private var canCopy: Bool {
+        text.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil
+            && text != AppText.translating
+    }
+
+    private func copyText() -> Bool {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty, trimmedText != AppText.translating else { return false }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(trimmedText, forType: .string)
+        return true
+    }
+
+    private func showCopyFeedback() {
+        copyFeedbackToken += 1
+        let token = copyFeedbackToken
+        withAnimation(.snappy(duration: 0.16)) {
+            isCopyFeedbackVisible = true
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(900))
+            await MainActor.run {
+                guard token == copyFeedbackToken else { return }
+                withAnimation(.easeOut(duration: 0.18)) {
+                    isCopyFeedbackVisible = false
+                }
+            }
+        }
     }
 }
 
@@ -534,6 +684,7 @@ private struct SessionOverviewCard: View {
     let toggleCapture: () -> Void
     let togglePause: () -> Void
     let showFloatingCaptions: () -> Void
+    let clearTranscript: () -> Void
     @State private var recentlyClickedControl: HeaderControl?
 
     private enum HeaderControl {
@@ -563,6 +714,17 @@ private struct SessionOverviewCard: View {
             .accessibilityHidden(!isRunning)
 
             HStack(spacing: 6) {
+                Button {
+                    clearTranscript()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(HeaderTransportButtonStyle(isActive: false))
+                .help(AppText.deleteAllSavedTranscripts)
+                .accessibilityLabel(AppText.deleteAllSavedTranscripts)
+
                 Button {
                     registerClick(.capture, action: toggleCapture)
                 } label: {

@@ -8,6 +8,7 @@ struct SidebarView: View {
     @State private var openAIAPIKey = ""
     @State private var deepgramAPIKey = ""
     @State private var googleTranslateAPIKey = ""
+    @State private var googleTTSAPIKey = ""
     @State private var deepLFreeAPIKey = ""
     @State private var deepLProAPIKey = ""
     @State private var configurationNotice: String?
@@ -33,6 +34,7 @@ struct SidebarView: View {
                 openAIAPIKey: $openAIAPIKey,
                 deepgramAPIKey: $deepgramAPIKey,
                 googleTranslateAPIKey: $googleTranslateAPIKey,
+                googleTTSAPIKey: $googleTTSAPIKey,
                 deepLFreeAPIKey: $deepLFreeAPIKey,
                 deepLProAPIKey: $deepLProAPIKey,
                 configurationNotice: $configurationNotice,
@@ -100,6 +102,22 @@ struct SidebarView: View {
             VStack(spacing: 10) {
                 languageControls
 
+                CurrentModeSummaryRow(session: session)
+
+                FloatingCaptionShortcutPanel(session: session)
+
+                CaptionScenarioModePicker(
+                    selection: $session.captionScenarioMode,
+                    isDisabled: session.isRunning
+                )
+
+                ResponsivenessModePicker(
+                    selection: $session.captionResponsivenessMode,
+                    isDisabled: session.isRunning
+                )
+
+                ProviderStatusPanel(session: session)
+
                 ProcessingEnginePicker(
                     selection: processingEngineBinding,
                     isDisabled: session.isRunning
@@ -118,10 +136,6 @@ struct SidebarView: View {
                     )
                 }
 
-                SessionDurationRadioGroup(
-                    selection: $session.sessionDurationMode,
-                    isDisabled: session.isRunning
-                )
             }
         }
         .onAppear {
@@ -142,7 +156,6 @@ struct SidebarView: View {
                     selection: $session.targetLanguage,
                     isDisabled: session.isRunning
                 )
-                OpenAIVoiceOutputRow(isOn: $session.isDubbingEnabled)
 
                 Text(AppText.openAILanguageModeDescription)
                     .font(.caption2)
@@ -332,11 +345,337 @@ private enum ProcessingEngine: String, CaseIterable, Identifiable {
     }
 }
 
+private struct CurrentModeSummaryRow: View {
+    @Bindable var session: TranslationSessionStore
+
+    var body: some View {
+        Label(summaryText, systemImage: "dot.radiowaves.left.and.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var summaryText: String {
+        [
+            session.captionScenarioMode.title,
+            transcriptionName,
+            translationName,
+            "\(session.sourceLanguage.localizedTitle) → \(session.targetLanguage.localizedTitle)"
+        ].joined(separator: " · ")
+    }
+
+    private var transcriptionName: String {
+        session.openAITranscriptionModel.isEnabled ? session.openAITranscriptionModel.title : "Apple Speech"
+    }
+
+    private var translationName: String {
+        session.openAITranslationModel.isEnabled ? session.openAITranslationModel.title : "Apple Translation"
+    }
+}
+
+private struct FloatingCaptionShortcutPanel: View {
+    @Bindable var session: TranslationSessionStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            MiniSectionHeader(
+                systemImage: "captions.bubble",
+                title: AppText.floatingCaptions
+            )
+
+            HStack(spacing: 6) {
+                PlacementButton(title: AppText.localized(english: "Bottom", korean: "하단", japanese: "下部", chineseSimplified: "底部"), systemImage: "rectangle.bottomthird.inset.filled") {
+                    FloatingCaptionWindowController.applyPlacement(.lowerThird, session: session)
+                    FloatingCaptionWindowController.open(session: session)
+                }
+                PlacementButton(title: AppText.localized(english: "Top", korean: "상단", japanese: "上部", chineseSimplified: "顶部"), systemImage: "rectangle.topthird.inset.filled") {
+                    FloatingCaptionWindowController.applyPlacement(.topCenter, session: session)
+                    FloatingCaptionWindowController.open(session: session)
+                }
+                PlacementButton(title: AppText.localized(english: "Island", korean: "아일랜드", japanese: "島", chineseSimplified: "灵动岛"), systemImage: "macbook") {
+                    FloatingCaptionWindowController.applyPlacement(.notchIsland, session: session)
+                    FloatingCaptionWindowController.open(session: session)
+                }
+                PlacementButton(title: AppText.localized(english: "Hide", korean: "숨김", japanese: "非表示", chineseSimplified: "隐藏"), systemImage: "eye.slash") {
+                    FloatingCaptionWindowController.close()
+                }
+            }
+
+            Picker(AppText.floatingDisplay, selection: $session.floatingCaptionDisplayMode) {
+                ForEach(FloatingCaptionDisplayMode.allCases) { mode in
+                    Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+    }
+}
+
+private struct PlacementButton: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity, minHeight: 42)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06))
+        }
+    }
+}
+
+private struct ResponsivenessModePicker: View {
+    @Binding var selection: CaptionResponsivenessMode
+    let isDisabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            MiniSectionHeader(
+                systemImage: "speedometer",
+                title: AppText.localized(english: "Latency", korean: "지연", japanese: "遅延", chineseSimplified: "延迟/流畅度")
+            )
+
+            Picker(AppText.localized(english: "Latency", korean: "지연", japanese: "遅延", chineseSimplified: "延迟/流畅度"), selection: $selection) {
+                ForEach(CaptionResponsivenessMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(isDisabled)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+}
+
+private struct ProviderStatusPanel: View {
+    @Bindable var session: TranslationSessionStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                MiniSectionHeader(
+                    systemImage: "network",
+                    title: AppText.localized(english: "Providers", korean: "제공자", japanese: "プロバイダー", chineseSimplified: "Provider 状态")
+                )
+
+                Spacer(minLength: 8)
+
+                Button {
+                    session.testCurrentAIPipeline()
+                } label: {
+                    if session.isCurrentPipelineTestRunning {
+                        ProgressView()
+                            .scaleEffect(0.55)
+                            .frame(width: 16, height: 16)
+                    } else {
+                        Label(AppText.localized(english: "Test AI", korean: "AI 테스트", japanese: "AIテスト", chineseSimplified: "测试 AI 链路"), systemImage: "bolt.heart")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+                .controlSize(.small)
+                .disabled(session.isCurrentPipelineTestRunning)
+            }
+
+            HStack(spacing: 8) {
+                ProviderStatusPill(
+                    title: transcriptionTitle,
+                    color: statusColor(session.transcriptionRuntimeStatus),
+                    detail: "\(session.transcriptionRuntimeStatus.title) · \(session.transcriptionRuntimeDetail)"
+                )
+                ProviderStatusPill(
+                    title: translationTitle,
+                    color: statusColor(session.translationRuntimeStatus),
+                    detail: "\(session.translationRuntimeStatus.title) · \(session.translationRuntimeDetail)"
+                )
+            }
+
+            if let duration = session.lastProviderRequestDurationText {
+                Label(duration, systemImage: "timer")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if let message = session.currentPipelineTestMessage {
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(message.localizedCaseInsensitiveContains("failed") || message.contains("失败") ? .red : .secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+    }
+
+    private var transcriptionTitle: String {
+        session.openAITranscriptionModel.isEnabled ? session.openAITranscriptionModel.title : "Apple Speech"
+    }
+
+    private var translationTitle: String {
+        session.openAITranslationModel.isEnabled ? session.openAITranslationModel.title : "Apple"
+    }
+
+    private func statusColor(_ status: ProviderRuntimeStatus) -> Color {
+        switch status {
+        case .stable:
+            .green
+        case .delayed, .reconnecting, .fallback:
+            .orange
+        case .rateLimited, .failed:
+            .red
+        case .idle:
+            .secondary
+        }
+    }
+}
+
+private struct ProviderStatusPill: View {
+    let title: String
+    let color: Color
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct AdvancedInterpretationPanel: View {
+    @Bindable var session: TranslationSessionStore
+    @Binding var googleTTSAPIKey: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            MiniSectionHeader(
+                systemImage: "person.2.wave.2",
+                title: AppText.localized(
+                    english: "Advanced Interpretation (Experimental)",
+                    korean: "고급 동시통역(실험적)",
+                    japanese: "高度同時通訳（実験的）",
+                    chineseSimplified: "高级同传（实验性）"
+                )
+            )
+
+            CompactToggleRow(
+                title: AppText.localized(
+                    english: "Two-way live voice",
+                    korean: "양방향 실시간 음성",
+                    japanese: "双方向ライブ音声",
+                    chineseSimplified: "双向实时语音"
+                ),
+                systemImage: "waveform.and.person.filled",
+                isOn: $session.isAdvancedInterpretationEnabled
+            )
+
+            Text(AppText.localized(
+                english: "Both configured languages are recognized from the microphone. Source language is translated to target; target language is translated back to source.",
+                korean: "마이크에서 두 설정 언어를 모두 인식합니다. 원문 언어는 번역 언어로, 번역 언어는 원문 언어로 말합니다.",
+                japanese: "マイクでは設定した2言語を両方認識します。原文は訳文へ、訳文は原文へ戻して読み上げます。",
+                chineseSimplified: "麦克风会同时识别原文/译文两种语言：说原文就翻译成译文，说译文就翻回原文。"
+            ))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+
+            ProviderAPIKeyRow(
+                apiKey: $googleTTSAPIKey,
+                provider: "Google TTS",
+                systemImage: "speaker.wave.2.circle",
+                placeholder: "Paste Google Cloud Text-to-Speech API key",
+                hasAPIKey: session.hasGoogleTTSAPIKey,
+                testMessage: session.googleTTSAPIConnectionTestMessage,
+                isTesting: session.isGoogleTTSAPIConnectionTestRunning,
+                save: {
+                    session.saveGoogleTTSAPIKey(googleTTSAPIKey)
+                    if session.hasGoogleTTSAPIKey { googleTTSAPIKey = "" }
+                },
+                remove: {
+                    session.removeGoogleTTSAPIKey()
+                    googleTTSAPIKey = ""
+                },
+                test: {
+                    session.testGoogleTTSAPIConnection()
+                }
+            )
+
+            Label(session.speechOutputRuntimeDetail, systemImage: "speaker.wave.2")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .padding(.horizontal, 8)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+    }
+}
+
+private struct MiniSectionHeader: View {
+    let systemImage: String
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 private struct ConfigurationSheetView: View {
     @Bindable var session: TranslationSessionStore
     @Binding var openAIAPIKey: String
     @Binding var deepgramAPIKey: String
     @Binding var googleTranslateAPIKey: String
+    @Binding var googleTTSAPIKey: String
     @Binding var deepLFreeAPIKey: String
     @Binding var deepLProAPIKey: String
     @Binding var configurationNotice: String?
@@ -361,7 +700,7 @@ private struct ConfigurationSheetView: View {
                     ))
                         .font(.headline.weight(.semibold))
 
-                    Text("\(ProcessingEngine.current(for: session).title) · \(session.sessionDurationMode.title)")
+                    Text(ProcessingEngine.current(for: session).title)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -453,7 +792,7 @@ private struct ConfigurationSheetView: View {
                     systemImage: "waveform.circle.fill",
                     value: session.openAITranscriptionModel.title
                 ) {
-                    ForEach(OpenAIRealtimeTranscriptionModel.allCases) { model in
+                    ForEach(AITranscriptionModel.allCases) { model in
                         Button(model.title) {
                             session.openAITranscriptionModel = model
                         }
@@ -465,7 +804,7 @@ private struct ConfigurationSheetView: View {
                     systemImage: "globe",
                     value: session.openAITranslationModel.title
                 ) {
-                    ForEach(OpenAIRealtimeTranslationModel.allCases) { model in
+                    ForEach(AITranslationModel.allCases) { model in
                         Button(model.title) {
                             session.openAITranslationModel = model
                         }
@@ -630,11 +969,7 @@ private struct ConfigurationSheetView: View {
                 )
                 .help(AppText.transcriptLintDescription)
 
-                CompactToggleRow(
-                    title: AppText.voiceOutput,
-                    systemImage: "speaker.wave.2.fill",
-                    isOn: $session.isDubbingEnabled
-                )
+                AdvancedInterpretationPanel(session: session, googleTTSAPIKey: $googleTTSAPIKey)
             }
         }
     }
@@ -791,6 +1126,75 @@ private struct ProcessingEnginePicker: View {
             .frame(maxWidth: .infinity)
             .disabled(isDisabled)
             .accessibilityLabel(AppText.model)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+}
+
+private struct CaptionScenarioModePicker: View {
+    @Binding var selection: CaptionScenarioMode
+    let isDisabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Image(systemName: selection.systemImage)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14)
+
+                Text(AppText.localized(
+                    english: "Scene",
+                    korean: "장면",
+                    japanese: "シーン",
+                    chineseSimplified: "场景"
+                ))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+            }
+
+            Menu {
+                ForEach(CaptionScenarioMode.allCases) { mode in
+                    Button {
+                        selection = mode
+                    } label: {
+                        Label(mode.title, systemImage: mode.systemImage)
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: selection.systemImage)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 22)
+
+                    Text(selection.title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.07))
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(isDisabled)
+            .help(selection.title)
+            .accessibilityLabel(selection.title)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -1344,45 +1748,6 @@ private struct ProviderAPIKeyRow: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
         .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-private struct SessionDurationRadioGroup: View {
-    @Binding var selection: SessionDurationMode
-    let isDisabled: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                Image(systemName: "timer")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-
-                Text(AppText.sessionLength)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 0)
-            }
-
-            Picker(AppText.sessionLength, selection: $selection) {
-                ForEach(SessionDurationMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.radioGroup)
-            .labelsHidden()
-            .disabled(isDisabled)
-            .accessibilityLabel(AppText.sessionLength)
-
-            Text(selection.detail)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
     }
 }
 

@@ -271,7 +271,7 @@ struct MenuBarStatusView: View {
             HStack(spacing: 8) {
                 ForEach(FloatingCaptionPlacement.allCases) { placement in
                     Button {
-                        session.floatingCaptionPlacement = placement
+                        FloatingCaptionWindowController.applyPlacement(placement, session: session)
                     } label: {
                         IconChoiceLabel(
                             systemImage: placement.systemImage,

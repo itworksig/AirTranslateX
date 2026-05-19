@@ -20,6 +20,7 @@ protocol LiveSpeechTranscriberDelegate: AnyObject {
         didOutputAudioPCM16Base64 audio: String,
         sampleRate: Double
     )
+    func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didUpdateStatus message: String)
     func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didFail error: Error)
 }
 
@@ -36,6 +37,7 @@ extension LiveSpeechTranscriberDelegate {
         didOutputAudioPCM16Base64 audio: String,
         sampleRate: Double
     ) {}
+    func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didUpdateStatus message: String) {}
 }
 
 final class LiveSpeechTranscriber: @unchecked Sendable {

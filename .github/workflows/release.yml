@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - VERSION
+      - Sources/**
+      - Resources/**
+      - Package.swift
+      - script/**
+      - .github/workflows/release.yml
+      - .github/release.yml
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Recreate release even if the tag already exists
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build Universal DMG
+    runs-on: macos-26
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ -z "$version" ]]; then
+            echo "VERSION is empty" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether release is needed
+        id: release_check
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          force="${{ github.event.inputs.force || 'false' }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null && [[ "$force" != "true" ]]; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Release $tag already exists. Bump VERSION or run manually with force=true."
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select Xcode
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+          swift --version
+
+      - name: Run tests
+        if: steps.release_check.outputs.should_release == 'true'
+        run: swift test
+
+      - name: Build universal DMG
+        if: steps.release_check.outputs.should_release == 'true'
+        id: dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg_path="$(VERSION='${{ steps.version.outputs.version }}' BUILD_NUMBER='${{ github.run_number }}' ./script/package_dmg.sh | tail -n 1)"
+          echo "path=$dmg_path" >> "$GITHUB_OUTPUT"
+          shasum -a 256 "$dmg_path" | tee "$dmg_path.sha256"
+
+      - name: Generate release notes
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$tag" \
+            -f target_commitish="$GITHUB_SHA" \
+            --jq .body > release_notes.md; then
+            :
+          else
+            previous_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+            {
+              echo "## Changes"
+              echo
+              if [[ -n "$previous_tag" ]]; then
+                git log --pretty=format:'- %s (%h)' "$previous_tag..HEAD"
+              else
+                git log --pretty=format:'- %s (%h)'
+              fi
+            } > release_notes.md
+          fi
+          {
+            echo
+            echo "## Artifact"
+            echo
+            echo '```text'
+            cat "${{ steps.dmg.outputs.path }}.sha256"
+            echo '```'
+          } >> release_notes.md
+
+      - name: Create tag
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release delete "$tag" --yes --cleanup-tag || true
+          fi
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            git tag -d "$tag"
+            git push origin ":refs/tags/$tag" || true
+          fi
+          git tag -a "$tag" -m "AirTranslateX ${{ steps.version.outputs.version }}"
+          git push origin "$tag"
+
+      - name: Publish GitHub release
+        if: steps.release_check.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          gh release create "$tag" \
+            "${{ steps.dmg.outputs.path }}" \
+            "${{ steps.dmg.outputs.path }}.sha256" \
+            --title "AirTranslateX ${{ steps.version.outputs.version }}" \
+            --notes-file release_notes.md
